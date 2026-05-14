@@ -314,3 +314,67 @@ button.heart:hover { background: rgba(221, 51, 51, 0.1); }
   border-radius: 999px;
 }
 #playback-hud button:hover { background: rgba(255, 255, 255, 0.15); }
+
+/* Mobile/narrow-screen polish.
+ * Goal: a phone in a music stand at 390-430px width should feel as good
+ * as desktop. Trade off: tab bodies shrink to fit chord lines without
+ * horizontal scroll on most songs; HUD compacts to leave reading room. */
+@media (max-width: 600px) {
+  #app { padding: 0.75rem 0.6rem 4rem; }
+
+  /* Search header */
+  #search-bar { padding: 0.4rem 0.6rem; }
+  .search-bar-row { gap: 0.35rem; }
+  #home-link, #search-btn { padding: 0.45rem 0.55rem; }
+  #search-input { padding: 0.45rem 0.6rem; }
+
+  /* Tab page */
+  .tab-header { flex-wrap: wrap; }
+  .tab-header h1 { font-size: 1.1rem; line-height: 1.25; flex: 1 1 100%; }
+  .tab-body {
+    font-size: 0.78rem;
+    padding: 0.6rem;
+    line-height: 1.45;
+  }
+  .chords { font-size: 0.85rem; }
+
+  /* Picker + songbook-back stack vertically on phone */
+  .picker-row { flex-direction: column; gap: 0.35rem; }
+  .picker-row .songbook-picker,
+  .songbook-back-btn { width: 100%; min-width: 0; }
+  .songbook-back-btn { text-align: center; }
+
+  /* HUD: shorter padding, smaller text, never wider than the screen */
+  #playback-hud {
+    bottom: 0.5rem;
+    padding: 0.4rem 0.65rem;
+    gap: 0.35rem;
+    max-width: calc(100vw - 1rem);
+  }
+  #playback-hud .hud-time {
+    min-width: 5.5rem;
+    font-size: 0.85rem;
+  }
+  #playback-hud button { padding: 0.25rem 0.55rem; font-size: 0.9rem; }
+
+  /* Letter grid tighter so all 39 cells fit in a clean grid */
+  .letter-grid {
+    grid-template-columns: repeat(auto-fill, minmax(2.2rem, 1fr));
+    gap: 0.35rem;
+  }
+  .letter-grid a, .letter-grid span {
+    padding: 0.5rem;
+    font-size: 0.95rem;
+  }
+
+  /* Songbook reorder buttons — bump to touch-friendly size */
+  .songbook-tabs .reorder button { min-width: 2.2rem; min-height: 2.2rem; font-size: 1rem; }
+  .songbook-tabs li { flex-wrap: wrap; gap: 0.3rem; }
+  .songbook-tabs li a { min-width: 55%; }
+
+  /* Heart easier to tap */
+  button.heart { font-size: 1.7rem; padding: 0.3rem 0.55rem; }
+
+  /* Songbook actions: stack if cramped */
+  .songbook-actions { gap: 0.35rem; }
+}
