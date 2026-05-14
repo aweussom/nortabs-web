@@ -220,7 +220,12 @@ def main():
     p.add_argument("--delay-ms", type=int, default=200,
                    help="Sleep between LLM calls (default 200ms).")
     p.add_argument("--ids", default="",
-                   help="Comma-separated artist/song IDs to enrich (overrides diff).")
+                   help="DEPRECATED: matches both artist AND song IDs without "
+                        "disambiguation. Prefer --artist-ids / --song-ids.")
+    p.add_argument("--artist-ids", default="",
+                   help="Comma-separated artist IDs to enrich.")
+    p.add_argument("--song-ids", default="",
+                   help="Comma-separated song IDs to enrich.")
     p.add_argument("--force", action="store_true",
                    help="Re-enrich entries that already have data.")
     p.add_argument("--dry-run", action="store_true",
@@ -244,7 +249,29 @@ def main():
     out_path = Path(args.out)
     cli_cmd = args.cli.split()
     types = {t.strip() for t in args.types.split(",") if t.strip()}
-    explicit_ids = {int(x) for x in args.ids.split(",") if x.strip()} if args.ids else None
+    explicit_any_ids = (
+        {int(x) for x in args.ids.split(",") if x.strip()} if args.ids else None
+    )
+    explicit_artist_ids = (
+        {int(x) for x in args.artist_ids.split(",") if x.strip()}
+        if args.artist_ids else None
+    )
+    explicit_song_ids = (
+        {int(x) for x in args.song_ids.split(",") if x.strip()}
+        if args.song_ids else None
+    )
+
+    def id_filter_allows(kind, ident):
+        # Type-specific filter authoritative when either is set.
+        if explicit_artist_ids is not None or explicit_song_ids is not None:
+            if kind == "artist":
+                return explicit_artist_ids is not None and ident in explicit_artist_ids
+            if kind == "song":
+                return explicit_song_ids is not None and ident in explicit_song_ids
+        if explicit_any_ids is not None:
+            return ident in explicit_any_ids
+        return True
+
     letters_filter = (
         {l.strip().lower() for l in args.letter.split(",") if l.strip()}
         if args.letter else None
@@ -297,7 +324,7 @@ def main():
     for kind, ident, payload, letter in iter_entries(catalog, letters_filter):
         if kind not in types:
             continue
-        if explicit_ids is not None and ident not in explicit_ids:
+        if not id_filter_allows(kind, ident):
             continue
         bucket = enrichment["artists"] if kind == "artist" else enrichment["songs"]
         if not args.force and str(ident) in bucket:

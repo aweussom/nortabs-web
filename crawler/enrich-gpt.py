@@ -205,7 +205,24 @@ def main():
     p.add_argument("--types", default="artist,song")
     p.add_argument("--letter", default="")
     p.add_argument("--limit", type=int, default=0)
-    p.add_argument("--ids", default="")
+    p.add_argument(
+        "--ids",
+        default="",
+        help="DEPRECATED: matches both artist AND song IDs (no disambiguation). "
+        "Use --artist-ids / --song-ids for clean filtering.",
+    )
+    p.add_argument(
+        "--artist-ids",
+        default="",
+        help="Comma-separated artist IDs to enrich. Songs are ignored unless "
+        "--song-ids is also passed.",
+    )
+    p.add_argument(
+        "--song-ids",
+        default="",
+        help="Comma-separated song IDs to enrich. Artists are ignored unless "
+        "--artist-ids is also passed.",
+    )
     p.add_argument("--force", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument(
@@ -244,9 +261,36 @@ def main():
     catalog_path = Path(args.catalog)
     out_path = Path(args.out)
     types = {t.strip() for t in args.types.split(",") if t.strip()}
-    explicit_ids = (
+    explicit_any_ids = (
         {int(x) for x in args.ids.split(",") if x.strip()} if args.ids else None
     )
+    explicit_artist_ids = (
+        {int(x) for x in args.artist_ids.split(",") if x.strip()}
+        if args.artist_ids else None
+    )
+    explicit_song_ids = (
+        {int(x) for x in args.song_ids.split(",") if x.strip()}
+        if args.song_ids else None
+    )
+
+    def id_filter_allows(kind, ident):
+        """Apply --artist-ids / --song-ids / --ids filters.
+
+        - If EITHER type-specific filter is set, type-specific filters are
+          authoritative: a kind without its own filter is rejected entirely
+          (so `--artist-ids 24` enriches only artist 24, no songs).
+        - Otherwise, fall back to legacy --ids (matches any-type, deprecated).
+        - With no filter set, accept all.
+        """
+        if explicit_artist_ids is not None or explicit_song_ids is not None:
+            if kind == "artist":
+                return explicit_artist_ids is not None and ident in explicit_artist_ids
+            if kind == "song":
+                return explicit_song_ids is not None and ident in explicit_song_ids
+        if explicit_any_ids is not None:
+            return ident in explicit_any_ids
+        return True
+
     letters_filter = (
         {l.strip().lower() for l in args.letter.split(",") if l.strip()}
         if args.letter
@@ -281,7 +325,7 @@ def main():
     for kind, ident, payload, letter in iter_entries(catalog, letters_filter):
         if kind not in types:
             continue
-        if explicit_ids is not None and ident not in explicit_ids:
+        if not id_filter_allows(kind, ident):
             continue
         bucket = enrichment["artists"] if kind == "artist" else enrichment["songs"]
         if not args.force and str(ident) in bucket:
