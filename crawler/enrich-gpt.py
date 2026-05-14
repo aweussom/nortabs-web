@@ -39,17 +39,81 @@ import sys
 import time
 from pathlib import Path
 
-# Reuse prompts and shared helpers from the Claude enrich script.
+# Reuse shared helpers from the Claude enrich script (catalog iteration,
+# JSON extraction, IO). Prompts are NOT reused — gpt-5-mini benefits a lot
+# from prompt caching, which needs the static instructions split into a
+# `system` message and only the variable bits in the `user` message. See
+# ARTIST_SYSTEM / SONG_SYSTEM below.
 sys.path.insert(0, str(Path(__file__).parent))
 from enrich import (
-    ARTIST_PROMPT,
-    SONG_PROMPT,
     extract_json,
     iter_entries,
     load_enrichment,
     reconfigure_streams,
     write_enrichment,
 )
+
+# Split prompts: identical system prefix → automatic prompt-cache hit on
+# every call after the first within the cache window (~5 min on Azure
+# OpenAI). System message is ~600 tokens; user message is 10-200 tokens.
+# Same instructions as enrich.py's ARTIST_PROMPT/SONG_PROMPT — restructured
+# so the static content comes FIRST and stays bit-identical between calls.
+
+ARTIST_SYSTEM = """\
+You are enriching a Norwegian guitar-tab catalog with search metadata for a web app.
+Output ONE JSON object only — no markdown fences, no commentary, no surrounding text.
+
+Schema (all fields optional except search_text):
+{
+  "search_text": "flat string of lowercase keywords blending Norwegian and English: artist name(s), aliases, country, region, era (decade), genre tags, similar artists. 30-60 words.",
+  "country": "norge | uk | usa | sverige | ...",
+  "region": "optional city/region",
+  "era": "e.g. '1990-2010', '1950-1970'",
+  "genre": ["pop", "folk", "rock", ...],
+  "notable": "one-line note if there is something noteworthy",
+  "similar": ["artists similar in style"]
+}
+
+Rules:
+- If you do not know the artist, output minimal JSON: {"search_text": "<artist name lowercased>"}.
+- For Norwegian artists: include both Norwegian and English mood/genre terms in search_text.
+- For artists you do know, lean toward broad recall — include common misspellings and aliases.
+- No markdown fences. No commentary. Just the JSON object.
+
+The next user message names the artist."""
+
+ARTIST_USER = "Artist name: {name}"
+
+SONG_SYSTEM = """\
+You are enriching a Norwegian guitar-tab catalog with search metadata for a web app.
+Output ONE JSON object only — no markdown fences, no commentary, no surrounding text.
+
+Schema (all fields optional except search_text):
+{
+  "search_text": "flat lowercase keywords blending Norwegian and English: themes, mood, occasion, alt-titles, key lyric phrases. 30-80 words.",
+  "language": "norsk | english | mixed | unknown",
+  "themes": ["love", "heartbreak", "childhood", "faith", ...],
+  "mood": ["melancholy", "joyful", "anthemic", "trist", "lystig", ...],
+  "occasion": ["wedding", "christmas", "funeral", "breakup", ...],
+  "alt_titles": {"no": "...", "en": "..."},
+  "key_phrases": ["3-5 memorable lyric phrases from the body, verbatim or near-verbatim"]
+}
+
+Rules:
+- For Norwegian songs: include English equivalents of mood/genre/themes in search_text.
+- For English songs: include Norwegian equivalents.
+- key_phrases must come from the body text (verbatim or very close).
+- No markdown fences. No commentary. Just the JSON object.
+
+The next user message provides the artist, song name, and the first 800 chars of one tab body."""
+
+SONG_USER = """\
+Artist: {artist}
+Song: {song}
+First 800 chars of one tab body:
+---
+{body}
+---"""
 
 DEFAULT_API_VERSION = "2024-12-01-preview"
 DEFAULT_MODEL_TAG = "azure-openai-gpt5-mini"
@@ -90,20 +154,27 @@ def make_client(endpoint, api_key, api_version):
     )
 
 
-def call_azure(client, deployment, prompt):
+def call_azure(client, deployment, system_msg, user_msg):
     """One round-trip to the deployment. Returns the model's content string.
 
     Notes:
+      - System + user split exists for prompt caching: identical system
+        prefix across calls lets gpt-5-mini reuse the cached prefix tokens
+        (cheaper + faster from the 2nd call within the cache window).
       - No `temperature` — gpt-5-mini rejects anything except default 1.0.
       - `response_format={"type":"json_object"}` guarantees valid JSON when
         supported. If the deployment errors on it, retry once without and
         rely on extract_json()'s best-effort parsing.
     """
     _, (APIStatusError, _RateLimitError) = _ensure_openai()
+    messages = [
+        {"role": "system", "content": system_msg},
+        {"role": "user", "content": user_msg},
+    ]
     try:
         resp = client.chat.completions.create(
             model=deployment,  # deployment NAME (not family)
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             response_format={"type": "json_object"},
         )
     except APIStatusError as e:
@@ -111,7 +182,7 @@ def call_azure(client, deployment, prompt):
         if e.status_code == 400 and "response_format" in str(e).lower():
             resp = client.chat.completions.create(
                 model=deployment,
-                messages=[{"role": "user", "content": prompt}],
+                messages=messages,
             )
         else:
             raise
@@ -140,10 +211,11 @@ def main():
     p.add_argument(
         "--rate-limit-per-min",
         type=int,
-        default=25,
-        help="Max requests per minute (default 25). At ~700 tokens/request "
-        "this stays under 20k TPM; halve it (12-13) to stay under 10k TPM "
-        "shared-resource caps.",
+        default=10,
+        help="Max requests per minute (default 10). Each call is ~1500-2000 "
+        "tokens total (system ~280 + user ~220 + output 500-1000), so 10 req/min "
+        "≈ 15-20k TPM — safely under the 20k TPM cap on the Q-Free resource. "
+        "Halve it (5) if sharing the resource with other tasks.",
     )
     p.add_argument("--max-consecutive-failures", type=int, default=3)
     args = p.parse_args()
@@ -217,14 +289,16 @@ def main():
             continue
 
         if kind == "artist":
-            prompt = ARTIST_PROMPT.format(name=payload["name"])
+            system_msg = ARTIST_SYSTEM
+            user_msg = ARTIST_USER.format(name=payload["name"])
             label = f"artist #{ident} [{letter}] '{payload['name']}'"
         else:
             tabs = payload["song"].get("tabs", [])
             body_excerpt = (
                 tabs[0].get("body", "")[:800] if tabs else "(no tab body)"
             )
-            prompt = SONG_PROMPT.format(
+            system_msg = SONG_SYSTEM
+            user_msg = SONG_USER.format(
                 artist=payload["artist_name"],
                 song=payload["song"]["name"],
                 body=body_excerpt,
@@ -235,7 +309,8 @@ def main():
             )
 
         if args.dry_run:
-            log(f"[dry] would enrich {label} ({len(prompt)} char prompt)")
+            prompt_chars = len(system_msg) + len(user_msg)
+            log(f"[dry] would enrich {label} ({prompt_chars} char prompt: {len(system_msg)} system + {len(user_msg)} user)")
             enriched += 1
         else:
             elapsed = time.time() - last_call
@@ -244,14 +319,14 @@ def main():
 
             log(f"enriching {label}…")
             try:
-                content = call_azure(client, deployment, prompt)
+                content = call_azure(client, deployment, system_msg, user_msg)
                 data = extract_json(content)
                 last_call = time.time()
             except RateLimitError:
                 log("  ! rate limit; sleeping 30s and retrying")
                 time.sleep(30)
                 try:
-                    content = call_azure(client, deployment, prompt)
+                    content = call_azure(client, deployment, system_msg, user_msg)
                     data = extract_json(content)
                     last_call = time.time()
                 except Exception as e2:
