@@ -51,7 +51,9 @@ from enrich import (
     load_enrichment,
     load_letter,
     reconfigure_streams,
+    release_letter_lock,
     save_letter,
+    try_acquire_letter_lock,
     write_enrichment,
 )
 
@@ -364,10 +366,34 @@ def main():
     last_call = 0.0
     t0 = time.time()
 
+    current_locked_letter = None
+    use_locks = legacy_enrichment is None
+    skipped_letters_locked = set()
+
+    def acquire_for(letter):
+        nonlocal current_locked_letter
+        if not use_locks:
+            return True
+        if current_locked_letter == letter:
+            return True
+        if current_locked_letter is not None:
+            release_letter_lock(out_dir, current_locked_letter)
+            current_locked_letter = None
+        if try_acquire_letter_lock(out_dir, letter):
+            current_locked_letter = letter
+            return True
+        return False
+
     for kind, ident, payload, letter in iter_entries(catalog, letters_filter, reverse=args.reverse):
         if kind not in types:
             continue
         if not id_filter_allows(kind, ident):
+            continue
+        if not acquire_for(letter):
+            if letter not in skipped_letters_locked:
+                log(f"letter '{letter}' locked by another process, skipping")
+                skipped_letters_locked.add(letter)
+            skipped += 1
             continue
         if not args.force and is_already_done(kind, ident, letter):
             skipped += 1
@@ -441,6 +467,9 @@ def main():
         if args.limit and enriched >= args.limit:
             log(f"reached --limit {args.limit}, stopping.")
             break
+
+    if current_locked_letter is not None:
+        release_letter_lock(out_dir, current_locked_letter)
 
     total = time.time() - t0
     log(f"done. enriched={enriched} skipped={skipped} failed={failed} in {total:.1f}s.")

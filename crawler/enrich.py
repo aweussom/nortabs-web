@@ -146,6 +146,42 @@ def write_enrichment(path, data, model_tag):
     path.write_text(text, encoding="utf-8")
 
 
+def try_acquire_letter_lock(out_dir, letter, stale_sec=3600):
+    """Atomic-create `<out_dir>/<letter>.lock`. Returns True if we own the lock.
+
+    If an existing lock file is older than `stale_sec`, it's deleted and we
+    try again — handles processes that crashed without releasing.
+    """
+    import os
+    lock_path = out_dir / f"{letter}.lock"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if lock_path.exists():
+        try:
+            age = time.time() - lock_path.stat().st_mtime
+            if age > stale_sec:
+                lock_path.unlink()
+        except FileNotFoundError:
+            pass
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(
+                f"{os.getpid()}\n"
+                f"{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n"
+            )
+        return True
+    except FileExistsError:
+        return False
+
+
+def release_letter_lock(out_dir, letter):
+    lock_path = out_dir / f"{letter}.lock"
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def load_letter(out_dir, letter):
     p = out_dir / f"{letter}.json"
     if not p.exists():
@@ -384,15 +420,42 @@ def main():
     consec_fail = 0
     t0 = time.time()
 
+    # Lock tracking: we hold at most one letter lock at a time.
+    # When the iterator moves to a new letter, release the old, try acquire the new.
+    current_locked_letter = None
+    use_locks = legacy_enrichment is None  # locking only meaningful in per-letter mode
+
+    def acquire_for(letter):
+        nonlocal current_locked_letter
+        if not use_locks:
+            return True
+        if current_locked_letter == letter:
+            return True
+        if current_locked_letter is not None:
+            release_letter_lock(out_dir, current_locked_letter)
+            current_locked_letter = None
+        if try_acquire_letter_lock(out_dir, letter):
+            current_locked_letter = letter
+            return True
+        return False
+
     # Pre-flight quota check
     ok, msg = quota_check()
     if not ok:
         handle_quota_limit(msg)
 
+    skipped_letters_locked = set()
     for kind, ident, payload, letter in iter_entries(catalog, letters_filter, reverse=args.reverse):
         if kind not in types:
             continue
         if not id_filter_allows(kind, ident):
+            continue
+        # Acquire lock for this letter (skip whole letter if locked by peer).
+        if not acquire_for(letter):
+            if letter not in skipped_letters_locked:
+                log(f"letter '{letter}' locked by another process, skipping its entries")
+                skipped_letters_locked.add(letter)
+            skipped += 1
             continue
         if not args.force and is_already_done(kind, ident, letter):
             skipped += 1
@@ -446,6 +509,10 @@ def main():
         if args.limit and enriched >= args.limit:
             log(f"reached --limit {args.limit}, stopping.")
             break
+
+    # Release any held lock on clean exit.
+    if current_locked_letter is not None:
+        release_letter_lock(out_dir, current_locked_letter)
 
     elapsed = time.time() - t0
     log(f"done. enriched={enriched} skipped={skipped} failed={failed} in {elapsed:.1f}s.")

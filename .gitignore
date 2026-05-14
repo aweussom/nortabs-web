@@ -6,6 +6,9 @@ crawler/data/
 crawler/enrich_data/
 crawler/*.log
 
+# Enrichment per-letter lock files (per-process state, not data)
+enrichment/*.lock
+
 # OS / editor cruft
 .DS_Store
 Thumbs.db
