@@ -17,6 +17,7 @@ export function render(state, root) {
     return;
   }
 
+  const sbParam = `?sb=${encodeURIComponent(sb.id)}`;
   const tabRows = sb.tab_ids.map(tid => {
     const r = getTab(tid);
     if (!r) {
@@ -27,7 +28,7 @@ export function render(state, root) {
     }
     const { tab, song, artist } = r;
     return `<li>
-      <a href="#/tab/${tab.id}">${escapeHtml(artist.name)} &mdash; ${escapeHtml(song.name)}</a>
+      <a href="#/tab/${tab.id}${sbParam}">${escapeHtml(artist.name)} &mdash; ${escapeHtml(song.name)}</a>
       <button data-action="remove" data-tab="${tab.id}">Fjern</button>
     </li>`;
   }).join('');

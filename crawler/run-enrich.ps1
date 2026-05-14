@@ -52,6 +52,15 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+
+# Force UTF-8 everywhere so Norwegian characters survive console + pipes +
+# log writes. Without this, the active code page mangles non-ASCII (e.g.
+# "…" → "ÔÇª", "Bjørn" → "Bj°rn") in console output even when both Python
+# and the log file write valid UTF-8.
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+$env:PYTHONIOENCODING = 'utf-8'
+
 $QuotaCache = Join-Path $env:USERPROFILE ".claude/quota-data.json"
 
 function Write-Log {

@@ -2,6 +2,7 @@ import { getTab } from '../catalog.js';
 import {
   isInFavorites,
   toggleFavorite,
+  getSongbook,
   getSongbooks,
   getSongbooksContaining,
   addToSongbook,
@@ -24,7 +25,11 @@ function renderHeart(tabId) {
 
 function renderPicker(tabId) {
   const all = getSongbooks();
-  const containing = new Set(getSongbooksContaining(tabId).map(s => s.id));
+  const containingList = getSongbooksContaining(tabId);
+  const containing = new Set(containingList.map(s => s.id));
+  const summary = containingList.length === 0
+    ? 'Legg til i sangbok'
+    : 'Legg til i ny/annen sangbok';
   const rows = all.map(sb => `
     <label>
       <input type="checkbox" data-songbook="${escapeHtml(sb.id)}" ${containing.has(sb.id) ? 'checked' : ''}>
@@ -33,13 +38,20 @@ function renderPicker(tabId) {
   `).join('');
   return `
     <details class="songbook-picker">
-      <summary>Legg til i sangbok</summary>
+      <summary>${escapeHtml(summary)}</summary>
       <div class="songbook-picker-body">
         ${rows}
         <button class="new-songbook-btn">+ Ny sangbok…</button>
       </div>
     </details>
   `;
+}
+
+function renderSongbookBack(sbId) {
+  if (!sbId) return '';
+  const sb = getSongbook(sbId);
+  if (!sb) return '';
+  return `<a href="#/songbook/${encodeURIComponent(sb.id)}" class="songbook-back-btn">&larr; Tilbake til ${escapeHtml(sb.name)}</a>`;
 }
 
 function formatRemaining(seconds) {
@@ -60,7 +72,7 @@ export function render(state, root) {
   renderTabUI(root, result, {
     href: `#/song/${result.song.id}`,
     label: result.song.name,
-  });
+  }, { songbookId: state.route.sb });
 }
 
 /**
@@ -68,8 +80,13 @@ export function render(state, root) {
  * Used by /tab/:id route AND by /song/:id when the song has exactly one tab
  * — in the latter case `backLink` points to the artist, skipping the otherwise
  * useless "song with 1 tab" intermediate page without changing the URL.
+ *
+ * `opts.songbookId`: if set and resolves to a real songbook, render an
+ * additional "← Tilbake til <songbook>" button next to the songbook picker.
+ * The originating songbook id is propagated via the `?sb=` URL param when
+ * navigating from #/songbook/:id.
  */
-export function renderTabUI(root, refs, backLink) {
+export function renderTabUI(root, refs, backLink, opts = {}) {
   const { tab, song, artist } = refs;
   const chords = Array.isArray(tab.chordnames) && tab.chordnames.length
     ? `<p class="chords">Chords: ${escapeHtml(tab.chordnames.join(' '))}</p>`
@@ -82,7 +99,10 @@ export function renderTabUI(root, refs, backLink) {
       <button class="heart" id="heart-btn" title="Legg til/fjern fra Favoritter">${renderHeart(tab.id)}</button>
       <button id="play-btn" title="Start auto-scroll fra gjeldende posisjon">▶ Auto-scroll</button>
     </div>
-    ${renderPicker(tab.id)}
+    <div class="picker-row">
+      ${renderPicker(tab.id)}
+      ${renderSongbookBack(opts.songbookId)}
+    </div>
     ${chords}
     <pre class="tab-body">${escapeHtml(tab.body || '')}</pre>
     <div id="playback-hud" data-phase="idle">

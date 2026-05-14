@@ -23,10 +23,13 @@ export function parseHash() {
   if (parts.length === 0) return { name: 'home' };
 
   const [head, arg] = parts;
+  // `sb` query param: when navigating from a songbook, we propagate the
+  // songbook id so the tab/song view can render a "back to songbook" button.
+  const sb = query.sb || null;
   if (head === 'letter' && arg) return { name: 'letter', letter: arg.toLowerCase() };
   if (head === 'artist' && arg) return { name: 'artist', id: Number(arg) };
-  if (head === 'song' && arg) return { name: 'song', id: Number(arg) };
-  if (head === 'tab' && arg) return { name: 'tab', id: Number(arg) };
+  if (head === 'song' && arg) return { name: 'song', id: Number(arg), sb };
+  if (head === 'tab' && arg) return { name: 'tab', id: Number(arg), sb };
   if (head === 'songbooks') return { name: 'songbooks' };
   if (head === 'songbook' && arg) return { name: 'songbook', id: arg };
   if (head === 'share') {

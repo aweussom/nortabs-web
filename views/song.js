@@ -18,7 +18,7 @@ export function render(state, root) {
     renderTabUI(root, { tab, song, artist }, {
       href: `#/artist/${artist.id}`,
       label: artist.name,
-    });
+    }, { songbookId: state.route.sb });
     return;
   }
 
