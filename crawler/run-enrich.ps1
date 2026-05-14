@@ -168,3 +168,9 @@ foreach ($letter in $letterArray) {
 }
 
 Write-Log "=== enrich run finished ==="
+
+# Refresh enrichment.json from per-letter files so the web app sees new data.
+Write-Log "merging per-letter files → enrichment.json"
+python crawler/merge-enrichment.py 2>&1 | ForEach-Object {
+  Write-Log $_
+}

@@ -128,6 +128,7 @@ def extract_json(text):
 
 
 def load_enrichment(path):
+    """Legacy single-file loader (kept for backward compat / migrate script)."""
     if not path.exists():
         return {"version": 1, "enriched_at": None, "model": None, "artists": {}, "songs": {}}
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -137,11 +138,33 @@ def load_enrichment(path):
 
 
 def write_enrichment(path, data, model_tag):
+    """Legacy single-file writer (kept for backward compat / migrate script)."""
     data["enriched_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     data["model"] = model_tag
     data.setdefault("version", 1)
     text = json.dumps(data, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     path.write_text(text, encoding="utf-8")
+
+
+def load_letter(out_dir, letter):
+    p = out_dir / f"{letter}.json"
+    if not p.exists():
+        return {"version": 1, "letter": letter, "artists": {}, "songs": {}}
+    data = json.loads(p.read_text(encoding="utf-8"))
+    data.setdefault("artists", {})
+    data.setdefault("songs", {})
+    return data
+
+
+def save_letter(out_dir, letter, data, model_tag):
+    data["enriched_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    data["model"] = model_tag
+    data.setdefault("version", 1)
+    data.setdefault("letter", letter)
+    p = out_dir / f"{letter}.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(data, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    p.write_text(text, encoding="utf-8")
 
 
 def iter_entries(catalog, letters_filter=None, reverse=False):
@@ -212,7 +235,15 @@ def main():
     reconfigure_streams()
     p = argparse.ArgumentParser(description="LLM enrichment for nortabs catalog")
     p.add_argument("--catalog", default="catalog.json")
-    p.add_argument("--out", default="enrichment.json")
+    p.add_argument("--out-dir", default="enrichment",
+                   help="Per-letter checkpoint directory (default: enrichment/). "
+                        "Each letter X gets its own enrichment/X.json. Run "
+                        "crawler/merge-enrichment.py to produce the combined "
+                        "enrichment.json that the web app loads.")
+    # Legacy single-file --out kept for the migrate script + occasional needs.
+    p.add_argument("--out", default="",
+                   help="DEPRECATED: writes a single enrichment.json instead "
+                        "of per-letter files. Prefer --out-dir.")
     p.add_argument("--cli", default=DEFAULT_CLI,
                    help='Shell command to invoke the LLM (default: "claude -p"). '
                         "The prompt is appended as a final argv.")
@@ -259,7 +290,8 @@ def main():
     args = p.parse_args()
 
     catalog_path = Path(args.catalog)
-    out_path = Path(args.out)
+    out_dir = Path(args.out_dir)
+    legacy_out_path = Path(args.out) if args.out else None
     cli_cmd = args.cli.split()
     types = {t.strip() for t in args.types.split(",") if t.strip()}
     explicit_any_ids = (
@@ -295,32 +327,30 @@ def main():
         print(f"catalog not found: {catalog_path}", file=sys.stderr)
         sys.exit(1)
     catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
-    enrichment = load_enrichment(out_path)
 
-    # Cross-check file (the other enricher's output). Re-read lazily during
-    # the run so newly-completed entries from the other process get skipped.
-    cross_path = Path(args.cross_check) if args.cross_check else None
-    cross_data = load_enrichment(cross_path) if (cross_path and cross_path.exists()) else None
-    cross_last_read = time.time()
+    # Legacy single-file mode: still supported for one-off / migrate flows.
+    legacy_enrichment = load_enrichment(legacy_out_path) if legacy_out_path else None
 
-    def is_already_done(kind, ident):
-        nonlocal cross_data, cross_last_read
-        bucket = enrichment["artists"] if kind == "artist" else enrichment["songs"]
-        if str(ident) in bucket:
-            return True
-        if cross_path is not None:
-            # Re-read cross file every 30s so we pick up the other process's progress.
-            if time.time() - cross_last_read > 30 and cross_path.exists():
-                try:
-                    cross_data = load_enrichment(cross_path)
-                except Exception:
-                    pass
-                cross_last_read = time.time()
-            if cross_data:
-                cbucket = cross_data.get("artists" if kind == "artist" else "songs", {})
-                if str(ident) in cbucket:
-                    return True
-        return False
+    # Per-letter cache: load on demand, write back after each enriched entry.
+    letter_cache = {}
+
+    def get_letter_data(letter):
+        if legacy_enrichment is not None:
+            return legacy_enrichment
+        if letter not in letter_cache:
+            letter_cache[letter] = load_letter(out_dir, letter)
+        return letter_cache[letter]
+
+    def persist(letter):
+        if legacy_enrichment is not None:
+            write_enrichment(legacy_out_path, legacy_enrichment, args.model_tag)
+        else:
+            save_letter(out_dir, letter, letter_cache[letter], args.model_tag)
+
+    def is_already_done(kind, ident, letter):
+        data = get_letter_data(letter)
+        bucket = data["artists"] if kind == "artist" else data["songs"]
+        return str(ident) in bucket
 
     def log(msg):
         ts = time.strftime("%H:%M:%S")
@@ -364,8 +394,7 @@ def main():
             continue
         if not id_filter_allows(kind, ident):
             continue
-        bucket = enrichment["artists"] if kind == "artist" else enrichment["songs"]
-        if not args.force and is_already_done(kind, ident):
+        if not args.force and is_already_done(kind, ident, letter):
             skipped += 1
             continue
 
@@ -406,8 +435,10 @@ def main():
                     sys.exit(2)
                 time.sleep(delay_s)
                 continue
+            ld = get_letter_data(letter)
+            bucket = ld["artists"] if kind == "artist" else ld["songs"]
             bucket[str(ident)] = data
-            write_enrichment(out_path, enrichment, args.model_tag)
+            persist(letter)
             enriched += 1
             consec_fail = 0
             time.sleep(delay_s)
@@ -419,7 +450,7 @@ def main():
     elapsed = time.time() - t0
     log(f"done. enriched={enriched} skipped={skipped} failed={failed} in {elapsed:.1f}s.")
     if not args.dry_run:
-        log(f"out: {out_path}")
+        log(f"out: {legacy_out_path if legacy_out_path else out_dir}")
 
 
 if __name__ == "__main__":

@@ -40,16 +40,18 @@ import time
 from pathlib import Path
 
 # Reuse shared helpers from the Claude enrich script (catalog iteration,
-# JSON extraction, IO). Prompts are NOT reused — gpt-5-mini benefits a lot
-# from prompt caching, which needs the static instructions split into a
-# `system` message and only the variable bits in the `user` message. See
-# ARTIST_SYSTEM / SONG_SYSTEM below.
+# JSON extraction, per-letter IO). Prompts are NOT reused — gpt-5-mini
+# benefits a lot from prompt caching, which needs the static instructions
+# split into a `system` message and only the variable bits in the `user`
+# message. See ARTIST_SYSTEM / SONG_SYSTEM below.
 sys.path.insert(0, str(Path(__file__).parent))
 from enrich import (
     extract_json,
     iter_entries,
     load_enrichment,
+    load_letter,
     reconfigure_streams,
+    save_letter,
     write_enrichment,
 )
 
@@ -196,10 +198,17 @@ def main():
     )
     p.add_argument("--catalog", default="catalog.json")
     p.add_argument(
+        "--out-dir",
+        default="enrichment",
+        help="Per-letter checkpoint directory (default: enrichment/, shared "
+        "with enrich.py). Each letter X gets enrichment/X.json. Web app loads "
+        "the merged output produced by merge-enrichment.py.",
+    )
+    p.add_argument(
         "--out",
-        default="enrichment-gpt.json",
-        help="Output file (default: enrichment-gpt.json — separate from "
-        "enrichment.json so benchmarks don't clobber the Sonnet output).",
+        default="",
+        help="DEPRECATED: writes a single file instead of per-letter. Use "
+        "--out-dir for the canonical pipeline.",
     )
     p.add_argument("--model-tag", default=DEFAULT_MODEL_TAG)
     p.add_argument("--types", default="artist,song")
@@ -271,7 +280,8 @@ def main():
             sys.exit(1)
 
     catalog_path = Path(args.catalog)
-    out_path = Path(args.out)
+    out_dir = Path(args.out_dir)
+    legacy_out_path = Path(args.out) if args.out else None
     types = {t.strip() for t in args.types.split(",") if t.strip()}
     explicit_any_ids = (
         {int(x) for x in args.ids.split(",") if x.strip()} if args.ids else None
@@ -314,33 +324,27 @@ def main():
         print(f"catalog not found: {catalog_path}", file=sys.stderr)
         sys.exit(1)
     catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
-    enrichment = load_enrichment(out_path)
 
-    cross_path = Path(args.cross_check) if args.cross_check else None
-    cross_data = (
-        load_enrichment(cross_path) if (cross_path and cross_path.exists()) else None
-    )
-    cross_last_read = time.time()
+    legacy_enrichment = load_enrichment(legacy_out_path) if legacy_out_path else None
+    letter_cache = {}
 
-    def is_already_done(kind, ident):
-        nonlocal cross_data, cross_last_read
-        bucket = enrichment["artists"] if kind == "artist" else enrichment["songs"]
-        if str(ident) in bucket:
-            return True
-        if cross_path is not None:
-            if time.time() - cross_last_read > 30 and cross_path.exists():
-                try:
-                    cross_data = load_enrichment(cross_path)
-                except Exception:
-                    pass
-                cross_last_read = time.time()
-            if cross_data:
-                cbucket = cross_data.get(
-                    "artists" if kind == "artist" else "songs", {}
-                )
-                if str(ident) in cbucket:
-                    return True
-        return False
+    def get_letter_data(letter):
+        if legacy_enrichment is not None:
+            return legacy_enrichment
+        if letter not in letter_cache:
+            letter_cache[letter] = load_letter(out_dir, letter)
+        return letter_cache[letter]
+
+    def persist(letter):
+        if legacy_enrichment is not None:
+            write_enrichment(legacy_out_path, legacy_enrichment, args.model_tag)
+        else:
+            save_letter(out_dir, letter, letter_cache[letter], args.model_tag)
+
+    def is_already_done(kind, ident, letter):
+        data = get_letter_data(letter)
+        bucket = data["artists"] if kind == "artist" else data["songs"]
+        return str(ident) in bucket
 
     if args.dry_run:
         client = None
@@ -365,8 +369,7 @@ def main():
             continue
         if not id_filter_allows(kind, ident):
             continue
-        bucket = enrichment["artists"] if kind == "artist" else enrichment["songs"]
-        if not args.force and is_already_done(kind, ident):
+        if not args.force and is_already_done(kind, ident, letter):
             skipped += 1
             continue
 
@@ -428,8 +431,10 @@ def main():
                     sys.exit(2)
                 continue
 
+            ld = get_letter_data(letter)
+            bucket = ld["artists"] if kind == "artist" else ld["songs"]
             bucket[str(ident)] = data
-            write_enrichment(out_path, enrichment, args.model_tag)
+            persist(letter)
             enriched += 1
             consec_fail = 0
 
@@ -440,7 +445,7 @@ def main():
     total = time.time() - t0
     log(f"done. enriched={enriched} skipped={skipped} failed={failed} in {total:.1f}s.")
     if not args.dry_run:
-        log(f"out: {out_path}")
+        log(f"out: {legacy_out_path if legacy_out_path else out_dir}")
 
 
 if __name__ == "__main__":
