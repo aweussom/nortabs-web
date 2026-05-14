@@ -1,0 +1,24 @@
+# Local Claude Code settings (per-user)
+.claude/
+
+# Crawler outputs that are regenerable / local-only
+crawler/data/
+crawler/enrich_data/
+crawler/*.log
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node, if it ever sneaks in
+node_modules/

@@ -1,0 +1,130 @@
+import { search } from '../search.js';
+import { getSongbooks } from '../storage.js';
+import { escapeHtml } from '../util.js';
+
+let _debounce = null;
+
+export function mount() {
+  const input = document.getElementById('search-input');
+  const results = document.getElementById('search-results');
+  const searchBtn = document.getElementById('search-btn');
+  if (!input || !results) return;
+
+  const run = () => {
+    clearTimeout(_debounce);
+    _debounce = setTimeout(() => runSearch(input.value, results), 100);
+  };
+
+  input.addEventListener('input', run);
+  input.addEventListener('focus', () => {
+    if (input.value.trim()) runSearch(input.value, results);
+  });
+
+  // The Søk-button is mostly a familiarity affordance — search runs as you
+  // type. Clicking it focuses the input and re-runs any existing query.
+  if (searchBtn) {
+    searchBtn.addEventListener('click', () => {
+      input.focus();
+      if (input.value.trim()) runSearch(input.value, results);
+    });
+  }
+
+  // Wire suggest links and clear on hash navigation to result.
+  results.addEventListener('click', (e) => {
+    const sug = e.target.closest('[data-suggest]');
+    if (sug) {
+      e.preventDefault();
+      input.value = sug.dataset.suggest;
+      runSearch(input.value, results);
+      input.focus();
+      return;
+    }
+    // If user clicked a result link, collapse the results panel.
+    if (e.target.closest('a[href^="#/"]')) {
+      results.hidden = true;
+    }
+  });
+}
+
+function favoriteTabIds() {
+  const ids = new Set();
+  for (const sb of getSongbooks()) {
+    for (const tid of sb.tab_ids) ids.add(tid);
+  }
+  return ids;
+}
+
+function frame(name) {
+  return document.querySelector(`#search-results [data-frame="${name}"]`);
+}
+
+function setFrame(name, html) {
+  const el = frame(name);
+  if (!el) return;
+  if (!html) {
+    el.hidden = true;
+    el.innerHTML = '';
+  } else {
+    el.hidden = false;
+    el.innerHTML = html;
+  }
+}
+
+function runSearch(query, results) {
+  const q = query.trim();
+  if (!q) {
+    results.hidden = true;
+    for (const f of results.querySelectorAll('section[data-frame]')) f.hidden = true;
+    return;
+  }
+
+  const r = search(q, { favoriteTabIds: favoriteTabIds() });
+  results.hidden = false;
+
+  if (r.total === 0 && !r.suggest) {
+    setFrame('suggest', null);
+    setFrame('artists', null);
+    setFrame('songs', null);
+    setFrame('lyrics', null);
+    setFrame(
+      'empty',
+      `<p>Ingen treff for &laquo;${escapeHtml(q)}&raquo;. ` +
+      `<a href="https://nortabs.net/search/?q=${encodeURIComponent(q)}" target="_blank" rel="noopener">Søk live på nortabs.net &rarr;</a></p>`
+    );
+    return;
+  }
+
+  setFrame('empty', null);
+
+  setFrame(
+    'suggest',
+    r.suggest ? `<p>Mente du <a href="#" data-suggest="${escapeHtml(r.suggest)}">${escapeHtml(r.suggest)}</a>?</p>` : null
+  );
+
+  setFrame(
+    'artists',
+    r.artists.length
+      ? `<h3>Artister (${r.artists.length})</h3><ul>${r.artists.map(a =>
+          `<li><a href="#/artist/${a.artist.id}">${escapeHtml(a.artist.name)}</a></li>`
+        ).join('')}</ul>`
+      : null
+  );
+
+  setFrame(
+    'songs',
+    r.songs.length
+      ? `<h3>Sanger (${r.songs.length})</h3><ul>${r.songs.map(s =>
+          `<li><a href="#/song/${s.song.id}">${escapeHtml(s.artist.name)} &mdash; ${escapeHtml(s.song.name)} <span class="muted">(${s.song.tabs.length})</span></a></li>`
+        ).join('')}</ul>`
+      : null
+  );
+
+  setFrame(
+    'lyrics',
+    r.bodyHits.length
+      ? `<h3>Tekstlinjer (${r.bodyHits.length})</h3><ul>${r.bodyHits.map(h =>
+          `<li><a href="#/song/${h.song.id}">${escapeHtml(h.artist.name)} &mdash; ${escapeHtml(h.song.name)} <span class="muted">(${h.song.tabs.length})</span></a></li>`
+        ).join('')}</ul>`
+      : null
+  );
+}

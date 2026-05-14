@@ -1,0 +1,167 @@
+const KEY = 'nortabs:songbooks:v1';
+const PB_KEY = 'nortabs:playback:v1';
+const PB_DEFAULT_DURATION_S = 180;
+
+function readPB() {
+  try {
+    const raw = localStorage.getItem(PB_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writePB(data) {
+  localStorage.setItem(PB_KEY, JSON.stringify(data));
+}
+
+export function getPlaybackDuration(tabId) {
+  return readPB()[String(tabId)]?.duration_s ?? PB_DEFAULT_DURATION_S;
+}
+
+export function setPlaybackDuration(tabId, durationS) {
+  const data = readPB();
+  const cur = data[String(tabId)] ?? {};
+  data[String(tabId)] = { ...cur, duration_s: durationS };
+  writePB(data);
+}
+
+export function getPlaybackStartY(tabId) {
+  const y = readPB()[String(tabId)]?.start_y;
+  return Number.isFinite(y) ? y : null;
+}
+
+export function setPlaybackStartY(tabId, y) {
+  const data = readPB();
+  const cur = data[String(tabId)] ?? {};
+  data[String(tabId)] = { ...cur, start_y: y };
+  writePB(data);
+}
+
+function now() {
+  return new Date().toISOString();
+}
+
+function slugify(s) {
+  return String(s).toLowerCase()
+    .replace(/ø/g, 'o').replace(/æ/g, 'a').replace(/å/g, 'a')
+    .normalize('NFD').replace(/\p{Diacritic}/gu, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+}
+
+function defaultData() {
+  return {
+    version: 1,
+    songbooks: [
+      { id: 'fav', name: 'Favoritter', created_at: now(), tab_ids: [] },
+    ],
+  };
+}
+
+function read() {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return defaultData();
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.version === 1 && Array.isArray(parsed.songbooks)) {
+      if (!parsed.songbooks.find(s => s.id === 'fav')) {
+        parsed.songbooks.unshift({ id: 'fav', name: 'Favoritter', created_at: now(), tab_ids: [] });
+      }
+      return parsed;
+    }
+    return defaultData();
+  } catch {
+    return defaultData();
+  }
+}
+
+function write(data) {
+  localStorage.setItem(KEY, JSON.stringify(data));
+}
+
+export function getSongbooks() {
+  return read().songbooks;
+}
+
+export function getSongbook(id) {
+  return read().songbooks.find(s => s.id === id) ?? null;
+}
+
+export function isInFavorites(tabId) {
+  return getSongbook('fav')?.tab_ids.includes(tabId) ?? false;
+}
+
+export function toggleFavorite(tabId) {
+  const data = read();
+  const fav = data.songbooks.find(s => s.id === 'fav');
+  const idx = fav.tab_ids.indexOf(tabId);
+  if (idx >= 0) fav.tab_ids.splice(idx, 1);
+  else fav.tab_ids.push(tabId);
+  write(data);
+  return idx < 0;
+}
+
+export function createSongbook(name) {
+  const data = read();
+  const base = slugify(name) || 'sangbok';
+  const id = `${base}-${Date.now().toString(36)}`;
+  data.songbooks.push({ id, name, created_at: now(), tab_ids: [] });
+  write(data);
+  return id;
+}
+
+export function renameSongbook(id, name) {
+  const data = read();
+  const sb = data.songbooks.find(s => s.id === id);
+  if (!sb || id === 'fav') return false;
+  sb.name = name;
+  write(data);
+  return true;
+}
+
+export function deleteSongbook(id) {
+  if (id === 'fav') return false;
+  const data = read();
+  data.songbooks = data.songbooks.filter(s => s.id !== id);
+  write(data);
+  return true;
+}
+
+export function addToSongbook(songbookId, tabId) {
+  const data = read();
+  const sb = data.songbooks.find(s => s.id === songbookId);
+  if (!sb) return false;
+  if (!sb.tab_ids.includes(tabId)) sb.tab_ids.push(tabId);
+  write(data);
+  return true;
+}
+
+export function removeFromSongbook(songbookId, tabId) {
+  const data = read();
+  const sb = data.songbooks.find(s => s.id === songbookId);
+  if (!sb) return false;
+  sb.tab_ids = sb.tab_ids.filter(id => id !== tabId);
+  write(data);
+  return true;
+}
+
+export function getSongbooksContaining(tabId) {
+  return read().songbooks.filter(s => s.tab_ids.includes(tabId));
+}
+
+export function importSharedSongbook(name, tabIds) {
+  const data = read();
+  const base = slugify(name) || 'delt-sangbok';
+  const id = `${base}-${Date.now().toString(36)}`;
+  data.songbooks.push({
+    id,
+    name,
+    created_at: now(),
+    tab_ids: tabIds.slice(),
+    imported: true,
+  });
+  write(data);
+  return id;
+}

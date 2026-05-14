@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NorTabs</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="search-bar">
+  <div class="search-bar-row">
+    <a id="home-link" href="#/" title="Tilbake til forsiden">⌂ Hjem</a>
+    <input type="search" id="search-input" placeholder="Søk artister, sanger, tekstlinjer…" autocomplete="off" spellcheck="false">
+    <button id="search-btn" title="Søk (resultater oppdateres mens du skriver)">Søk</button>
+  </div>
+  <div id="search-results" hidden>
+    <section data-frame="suggest" hidden></section>
+    <section data-frame="artists" hidden></section>
+    <section data-frame="songs" hidden></section>
+    <section data-frame="lyrics" hidden></section>
+    <section data-frame="empty" hidden></section>
+  </div>
+</header>
+<div id="app"></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

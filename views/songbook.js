@@ -1,0 +1,120 @@
+import { getSongbook, removeFromSongbook, renameSongbook, deleteSongbook } from '../storage.js';
+import { getTab } from '../catalog.js';
+import { escapeHtml } from '../util.js';
+import { buildExportHTML, exportFilename } from '../exporter.js';
+
+function buildShareUrl(songbook) {
+  const ids = songbook.tab_ids.join(',');
+  const name = encodeURIComponent(songbook.name);
+  const base = `${location.origin}${location.pathname}`;
+  return `${base}#/share?name=${name}&ids=${ids}`;
+}
+
+export function render(state, root) {
+  const sb = getSongbook(state.route.id);
+  if (!sb) {
+    root.innerHTML = `<p><a href="#/songbooks">&larr; Sangbøker</a></p><p>Sangbok ikke funnet.</p>`;
+    return;
+  }
+
+  const tabRows = sb.tab_ids.map(tid => {
+    const r = getTab(tid);
+    if (!r) {
+      return `<li class="missing">
+        <span class="muted">Tab #${tid} (ikke i lokal katalog)</span>
+        <button data-action="remove" data-tab="${tid}">Fjern</button>
+      </li>`;
+    }
+    const { tab, song, artist } = r;
+    return `<li>
+      <a href="#/tab/${tab.id}">${escapeHtml(artist.name)} &mdash; ${escapeHtml(song.name)}</a>
+      <button data-action="remove" data-tab="${tab.id}">Fjern</button>
+    </li>`;
+  }).join('');
+
+  const isFav = sb.id === 'fav';
+  const canDelete = !isFav;
+  const canRename = !isFav;
+
+  root.innerHTML = `
+    <p><a href="#/songbooks">&larr; Sangbøker</a></p>
+    <h1>${escapeHtml(sb.name)}</h1>
+    <div class="songbook-actions">
+      <button id="share-btn">Del lenke</button>
+      <button id="export-btn">Eksporter HTML</button>
+      ${canRename ? `<button id="rename-btn">Endre navn</button>` : ''}
+      ${canDelete ? `<button id="delete-btn" class="danger">Slett sangbok</button>` : ''}
+    </div>
+    ${sb.tab_ids.length === 0
+      ? '<p class="muted">Ingen tabs ennå. Bruk hjerteknappen eller "Legg til i sangbok" når du ser på en tab.</p>'
+      : `<ol class="songbook-tabs">${tabRows}</ol>`}
+  `;
+
+  root.querySelector('#share-btn').addEventListener('click', async () => {
+    const url = buildShareUrl(sb);
+    try {
+      await navigator.clipboard.writeText(url);
+      alert(`Lenke kopiert!\n\n${url}`);
+    } catch {
+      prompt('Kopier denne lenken:', url);
+    }
+  });
+
+  root.querySelector('#export-btn').addEventListener('click', () => {
+    const tabs = sb.tab_ids.map(tid => {
+      if (typeof tid === 'string' && tid.startsWith('ug-')) {
+        // Private (UG-imported) tabs — placeholder for when UG import is built.
+        // For now, return null so the export shows a "missing" placeholder.
+        return null;
+      }
+      const ref = getTab(tid);
+      if (!ref) return null;
+      return {
+        id: ref.tab.id,
+        artist: ref.artist.name,
+        song: ref.song.name,
+        body: ref.tab.body || '',
+        chordnames: ref.tab.chordnames || [],
+      };
+    });
+    const html = buildExportHTML({ name: sb.name, tabs, exportedAt: new Date() });
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    // Open in new tab so the user can verify the content looks right.
+    window.open(url, '_blank');
+    // And trigger a download so they have a file to email/share.
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = exportFilename(sb.name);
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    // Revoke after a delay so both the open and download can resolve.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  });
+
+  if (canRename) {
+    root.querySelector('#rename-btn').addEventListener('click', () => {
+      const name = prompt('Nytt navn:', sb.name);
+      if (!name || !name.trim()) return;
+      renameSongbook(sb.id, name.trim());
+      render(state, root);
+    });
+  }
+
+  if (canDelete) {
+    root.querySelector('#delete-btn').addEventListener('click', () => {
+      if (!confirm(`Slett "${sb.name}"? Tabs i sangboken slettes ikke fra katalogen.`)) return;
+      deleteSongbook(sb.id);
+      location.hash = '#/songbooks';
+    });
+  }
+
+  for (const btn of root.querySelectorAll('button[data-action="remove"]')) {
+    btn.addEventListener('click', () => {
+      const tid = Number(btn.dataset.tab);
+      removeFromSongbook(sb.id, tid);
+      render(state, root);
+    });
+  }
+}
