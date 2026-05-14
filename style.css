@@ -161,18 +161,23 @@ li { margin: 0.25rem 0; }
  * Tre presets velges via media queries så aspekt-forholdet passer skjermen. */
 .home-wordcloud {
   position: fixed;
-  top: 4rem;          /* under sticky search bar */
+  top: 4rem;
   left: 0;
   right: 0;
   bottom: 0;
   background-image: url('home-wordcloud.svg');
   background-repeat: no-repeat;
   background-position: center center;
-  background-size: contain;  /* SVG scales fritt; bevarer aspect-ratio */
-  opacity: 0.35;
+  background-size: 160% auto;       /* stor — fyller etter rotasjon */
+  transform: rotate(-28deg) scale(1.9);
+  transform-origin: center center;
+  opacity: 0.45;
   pointer-events: none;
   z-index: 0;
+  overflow: hidden;                  /* skjul roterte hjørner */
 }
+/* Skjul horisontal overflow på body slik at rotert SVG ikke gir scrollbar. */
+html, body { overflow-x: hidden; }
 /* Home content sits on top of the wordcloud. */
 .home-content { position: relative; z-index: 1; }
 #app { position: relative; }
