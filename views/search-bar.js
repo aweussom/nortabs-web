@@ -8,7 +8,19 @@ export function mount() {
   const input = document.getElementById('search-input');
   const results = document.getElementById('search-results');
   const searchBtn = document.getElementById('search-btn');
+  const homeLink = document.getElementById('home-link');
   if (!input || !results) return;
+
+  // Hjem should also clear the active search so the home view is actually
+  // visible. Without this, typing a long query then clicking Hjem leaves
+  // the results panel covering everything — feels like the button did nothing.
+  if (homeLink) {
+    homeLink.addEventListener('click', () => {
+      input.value = '';
+      results.hidden = true;
+      for (const f of results.querySelectorAll('section[data-frame]')) f.hidden = true;
+    });
+  }
 
   const run = () => {
     clearTimeout(_debounce);

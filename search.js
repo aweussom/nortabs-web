@@ -13,7 +13,9 @@ let _artistIndex = new Map(); // token → Set<artistId>
 let _songIndex = new Map();   // token → Set<songId>
 let _bodyIndex = new Map();   // token → Set<tabId>
 let _allTokens = [];          // sorted array of unique tokens (for prefix scan)
-let _bodyIdf = new Map();     // token → IDF-style weight (rare tokens > common ones)
+let _bodyIdf = new Map();     // token → IDF weight (rare tokens > common ones)
+let _songIdf = new Map();
+let _artistIdf = new Map();
 let _totalTabs = 0;
 
 let _artistById = new Map();
@@ -82,18 +84,25 @@ export function buildIndex(catalog, enrichment) {
 
   _allTokens = [...allTokenSet].sort();
 
-  // Precompute IDF for body tokens: rare tokens get high weight, common ones
-  // (jeg, vil, på, ...) get near-zero. Helps lyric search match the
-  // distinctive part of a phrase rather than the filler.
+  // Precompute IDF for all three indexes. Rare tokens get high weight, common
+  // ones (jeg, vil, på, ...) get near-zero — so a phrase like "jeg vil tjene
+  // penger på kroppen min" is matched on its distinctive tokens, not "jeg".
   _totalTabs = _tabById.size || 1;
-  _bodyIdf = new Map();
-  for (const [token, set] of _bodyIndex) {
-    const df = set.size;
-    // smooth log IDF, clamped to [0.05, 1.0]
-    const raw = Math.log((_totalTabs + 1) / (df + 1));
-    const maxRaw = Math.log(_totalTabs + 1);
-    _bodyIdf.set(token, Math.max(0.05, Math.min(1.0, raw / maxRaw)));
-  }
+  const totalSongs = _songById.size || 1;
+  const totalArtists = _artistById.size || 1;
+  const idfFor = (index, total) => {
+    const out = new Map();
+    const maxRaw = Math.log(total + 1);
+    for (const [token, set] of index) {
+      const df = set.size;
+      const raw = Math.log((total + 1) / (df + 1));
+      out.set(token, Math.max(0.05, Math.min(1.0, raw / maxRaw)));
+    }
+    return out;
+  };
+  _bodyIdf = idfFor(_bodyIndex, _totalTabs);
+  _songIdf = idfFor(_songIndex, totalSongs);
+  _artistIdf = idfFor(_artistIndex, totalArtists);
 
   return {
     artistTokens: _artistIndex.size,
@@ -165,26 +174,39 @@ export function search(query, opts = {}) {
   const tabScores = new Map();
   let anyHit = false;
 
+  // Prefix-match heuristic: short queries (1-3 tokens) are exploratory —
+  // user might be mid-typing or guessing spelling, so prefix expansion +
+  // semantic match helps ("ryba" → Rybak; "barnsanger" → barnesanger).
+  // Long queries (4+ tokens) signal the user knows what they want and is
+  // typing a phrase/quote; exact match kills prefix-explosion noise.
+  const isPhraseQuery = tokens.length >= 4;
+
+  // In phrase mode (4+ tokens), skip songIndex/artistIndex contributions
+  // entirely. Common short tokens (jeg, vil, på) would otherwise add noise
+  // even at exact match. Body propagation alone drives the songs frame —
+  // the song that contains the phrase wins, full stop.
+  const usesNameIndexes = !isPhraseQuery;
+
   for (const qt of tokens) {
-    // Artist / song name indexes use prefix matching — typing "rybak" should
-    // find "rybak" entries even if the user only typed "ryba".
-    const matched = prefixMatches(qt);
-    for (const t of matched) {
-      const exactBonus = t === qt ? 1.0 : 0.6;
-      for (const aid of (_artistIndex.get(t) ?? [])) {
-        bumpScore(artistScores, aid, exactBonus * 10);
-        anyHit = true;
-      }
-      for (const sid of (_songIndex.get(t) ?? [])) {
-        bumpScore(songScores, sid, exactBonus * 5);
-        anyHit = true;
+    if (usesNameIndexes) {
+      const matched = prefixMatches(qt);
+      for (const t of matched) {
+        const exactBonus = t === qt ? 1.0 : 0.6;
+        const aIdf = _artistIdf.get(t) ?? 0.5;
+        const sIdf = _songIdf.get(t) ?? 0.5;
+        for (const aid of (_artistIndex.get(t) ?? [])) {
+          bumpScore(artistScores, aid, exactBonus * aIdf * 10);
+          anyHit = true;
+        }
+        for (const sid of (_songIndex.get(t) ?? [])) {
+          bumpScore(songScores, sid, exactBonus * sIdf * 5);
+          anyHit = true;
+        }
       }
     }
-    // Body index uses EXACT match only. Prefix expansion on body causes
-    // false positives ("min" → "minutter", "jeg" → "jegere"), inflating
-    // bodies that don't actually contain the query phrase. IDF weighting
-    // further suppresses common-token noise (jeg, på, vil) so songs with
-    // the *distinctive* part of a phrase (tjene, kroppen) float to the top.
+    // Body index uses EXACT match + IDF in BOTH modes. The distinctive tokens
+    // (tjene, kroppen, fairytale) dominate via high IDF; common-token noise
+    // (jeg, på) is suppressed.
     const idf = _bodyIdf.get(qt) ?? 0.5;
     for (const tid of (_bodyIndex.get(qt) ?? [])) {
       bumpScore(tabScores, tid, idf * 4);
@@ -196,6 +218,30 @@ export function search(query, opts = {}) {
   // Per user direction: "Høyt — stor boost, men kvalitet kan fortsatt slo."
   for (const [tid, cur] of tabScores) {
     if (favoriteTabIds.has(tid)) cur.score *= 4;
+  }
+
+  // Propagate body matches up to the songs frame: when a user types a
+  // remembered lyric, the song that contains it should dominate Sanger.
+  //
+  // Dedup by song: a song with N tabs would otherwise multiply its body
+  // score by N (each tab contributes), unfairly inflating multi-tab songs.
+  // We take the MAX body score across the song's tabs as its "best evidence".
+  const bestBodyPerSong = new Map(); // sid → max tab score
+  for (const [tid, cur] of tabScores) {
+    const ref = _tabById.get(tid);
+    if (!ref) continue;
+    const sid = ref.song.id;
+    const prev = bestBodyPerSong.get(sid) ?? 0;
+    if (cur.score > prev) bestBodyPerSong.set(sid, cur.score);
+  }
+  for (const [sid, bodyScore] of bestBodyPerSong) {
+    const boost = bodyScore * 3.0;
+    const existing = songScores.get(sid);
+    if (existing) {
+      existing.score += boost;
+    } else {
+      songScores.set(sid, { score: boost, hits: 1 });
+    }
   }
 
   // Lyrics frame is keyed by song: multiple tabs of the same song should
