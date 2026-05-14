@@ -144,13 +144,63 @@ def write_enrichment(path, data, model_tag):
     path.write_text(text, encoding="utf-8")
 
 
-def iter_entries(catalog):
-    """Yields ('artist'|'song', id, payload) tuples in catalog order."""
-    for letter, bucket in (catalog.get("letters") or {}).items():
+def iter_entries(catalog, letters_filter=None):
+    """Yields ('artist'|'song', id, payload, letter) tuples in catalog order.
+
+    `letters_filter`: optional iterable of letter codes ('a','b','å',...) to
+    restrict iteration to. None = all letters.
+    """
+    all_letters = catalog.get("letters") or {}
+    wanted = None if letters_filter is None else set(letters_filter)
+    for letter, bucket in all_letters.items():
+        if wanted is not None and letter not in wanted:
+            continue
         for artist in bucket.get("artists", []):
-            yield ("artist", artist["id"], artist)
+            yield ("artist", artist["id"], artist, letter)
             for song in artist.get("songs", []):
-                yield ("song", song["id"], {"artist_name": artist["name"], "song": song})
+                yield ("song", song["id"], {"artist_name": artist["name"], "song": song}, letter)
+
+
+QUOTA_CACHE_PATH = Path.home() / ".claude" / "quota-data.json"
+
+
+def _parse_resets_in(s):
+    """Parse claude-code-quota's 'resets_in' strings like '1 hr 12 min', '47 min',
+    '2 hr' into seconds. Returns 3600 (1 hr) as a safe default if unparseable."""
+    if not s:
+        return 3600
+    total = 0
+    found_any = False
+    m = re.search(r"(\d+)\s*hr", s)
+    if m:
+        total += int(m.group(1)) * 3600
+        found_any = True
+    m = re.search(r"(\d+)\s*min", s)
+    if m:
+        total += int(m.group(1)) * 60
+        found_any = True
+    return total if found_any and total > 0 else 3600
+
+
+def read_quota():
+    """Read ~/.claude/quota-data.json. Returns dict with keys
+    `pct` (5h usage %, int or None), `resets_in` (str or None), `stale` (bool),
+    or None if the file is missing/unreadable.
+
+    Cache is maintained by claude-code-quota; freshness depends on the user
+    having a Claude Code session running (statusline refreshes drive updates).
+    """
+    if not QUOTA_CACHE_PATH.exists():
+        return None
+    try:
+        data = json.loads(QUOTA_CACHE_PATH.read_text(encoding="utf-8"))
+        return {
+            "pct": data.get("quota_used_pct"),
+            "resets_in": data.get("resets_in"),
+            "stale": bool(data.get("stale")),
+        }
+    except Exception:
+        return None
 
 
 def main():
@@ -175,6 +225,19 @@ def main():
                    help="Re-enrich entries that already have data.")
     p.add_argument("--dry-run", action="store_true",
                    help="Show what would be enriched without calling the LLM.")
+    p.add_argument("--letter", default="",
+                   help="Restrict to one or more catalog letters (comma-separated, "
+                        "e.g. 'a' or 'å,æ,ø'). Default: all letters.")
+    p.add_argument("--quota-threshold-pct", type=int, default=90,
+                   help="Stop when claude-code-quota cache reports 5h usage >= "
+                        "this %% (default 90). 0 disables quota check.")
+    p.add_argument("--on-quota-limit", choices=("exit", "wait"), default="exit",
+                   help="What to do when quota threshold is hit: 'exit' (default, "
+                        "clean stop — rerun manually after reset) or 'wait' "
+                        "(sleep until resets_in elapsed).")
+    p.add_argument("--max-consecutive-failures", type=int, default=3,
+                   help="Bail out after N CLI failures in a row (default 3). "
+                        "Safety net for when the quota cache is stale.")
     args = p.parse_args()
 
     catalog_path = Path(args.catalog)
@@ -182,6 +245,10 @@ def main():
     cli_cmd = args.cli.split()
     types = {t.strip() for t in args.types.split(",") if t.strip()}
     explicit_ids = {int(x) for x in args.ids.split(",") if x.strip()} if args.ids else None
+    letters_filter = (
+        {l.strip().lower() for l in args.letter.split(",") if l.strip()}
+        if args.letter else None
+    )
     delay_s = args.delay_ms / 1000.0
 
     if not catalog_path.exists():
@@ -193,12 +260,40 @@ def main():
     def log(msg):
         print(msg, file=sys.stderr, flush=True)
 
+    def quota_check():
+        """Returns (ok, message). ok=False means we should stop."""
+        if args.quota_threshold_pct <= 0:
+            return True, None
+        q = read_quota()
+        if q is None or q["pct"] is None:
+            return True, None  # no quota data, proceed silently
+        if q["pct"] >= args.quota_threshold_pct:
+            stale_note = " (cache stale)" if q["stale"] else ""
+            return False, f"5h quota at {q['pct']}%{stale_note}, resets in {q['resets_in']}"
+        return True, None
+
+    def handle_quota_limit(msg):
+        if args.on_quota_limit == "wait":
+            # Parse "X hr Y min" / "Y min" loosely → seconds, sleep, then continue.
+            secs = _parse_resets_in(read_quota().get("resets_in") if read_quota() else None)
+            log(f"{msg} — waiting {secs}s ({secs // 60} min) then resuming")
+            time.sleep(max(60, secs) + 30)  # extra 30s buffer
+        else:
+            log(f"{msg} — exiting (re-run after reset; idempotent diff will skip done entries)")
+            sys.exit(0)
+
     enriched = 0
     skipped = 0
     failed = 0
+    consec_fail = 0
     t0 = time.time()
 
-    for kind, ident, payload in iter_entries(catalog):
+    # Pre-flight quota check
+    ok, msg = quota_check()
+    if not ok:
+        handle_quota_limit(msg)
+
+    for kind, ident, payload, letter in iter_entries(catalog, letters_filter):
         if kind not in types:
             continue
         if explicit_ids is not None and ident not in explicit_ids:
@@ -210,7 +305,7 @@ def main():
 
         if kind == "artist":
             prompt = ARTIST_PROMPT.format(name=payload["name"])
-            label = f"artist #{ident} '{payload['name']}'"
+            label = f"artist #{ident} [{letter}] '{payload['name']}'"
         else:
             tabs = payload["song"].get("tabs", [])
             body_excerpt = tabs[0].get("body", "")[:800] if tabs else "(no tab body)"
@@ -219,12 +314,18 @@ def main():
                 song=payload["song"]["name"],
                 body=body_excerpt,
             )
-            label = f"song #{ident} '{payload['artist_name']}' - '{payload['song']['name']}'"
+            label = f"song #{ident} [{letter}] '{payload['artist_name']}' - '{payload['song']['name']}'"
 
         if args.dry_run:
             log(f"[dry] would enrich {label} ({len(prompt)} char prompt)")
             enriched += 1
         else:
+            # Periodic quota re-check (every 10 successful enrichments)
+            if enriched > 0 and enriched % 10 == 0:
+                ok, msg = quota_check()
+                if not ok:
+                    handle_quota_limit(msg)
+
             log(f"enriching {label}…")
             try:
                 output = call_llm(cli_cmd, prompt)
@@ -232,11 +333,17 @@ def main():
             except Exception as e:
                 log(f"  ! failed: {e}")
                 failed += 1
+                consec_fail += 1
+                if consec_fail >= args.max_consecutive_failures:
+                    log(f"  ! {consec_fail} consecutive failures — likely quota or "
+                        f"network issue. Exiting. Re-run after reset.")
+                    sys.exit(2)
                 time.sleep(delay_s)
                 continue
             bucket[str(ident)] = data
             write_enrichment(out_path, enrichment, args.model_tag)
             enriched += 1
+            consec_fail = 0
             time.sleep(delay_s)
 
         if args.limit and enriched >= args.limit:
