@@ -49,9 +49,15 @@ The Python app is a **frozen reference**, not a sibling to keep in sync.
 
 ## Cache-busting
 
-`version.js` exports `APP_VERSION` as a manual stamp. `catalog.js` appends `?v=${APP_VERSION}` to its `catalog.json` and `enrichment.json` fetches. Bump the version string when catalog shape changes, a new crawl/enrichment is pushed that users must pick up, or JS that depends on new data fields ships. Pure UI/JS tweaks don't need a bump — they ride the HTML's normal cache cycle and can't cause data/code mismatch.
+`version.js` exports `APP_VERSION` (Unix epoch). `catalog.js` appends `?v=${APP_VERSION}` to its `catalog.json` and `enrichment.json` fetches so every commit produces a unique cache-bust token.
 
-Format: `YYYY-MM-DD-N` (e.g. `2026-05-14-2`).
+**Auto-bumped on commit** by `.githooks/pre-commit` (Python one-liner). Activate the hook once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+After that, every commit bumps `version.js` automatically. Don't edit manually — the hook will overwrite. Skip with `git commit --no-verify` for the rare commit that shouldn't change deployed cache state.
 
 ## Crawler
 

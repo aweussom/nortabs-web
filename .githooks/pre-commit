@@ -1,0 +1,20 @@
+#!/bin/sh
+# Auto-bump version.js's APP_VERSION to the current Unix epoch on every commit,
+# so cache-busting tokens on catalog.json / enrichment.json fetches always
+# reflect the latest push. Bypass with `git commit --no-verify` if needed.
+python - <<'PYEOF'
+import pathlib, re, time
+p = pathlib.Path('version.js')
+if not p.exists():
+    raise SystemExit(0)
+txt = p.read_text(encoding='utf-8')
+new = re.sub(
+    r"export const APP_VERSION = '.*?';",
+    f"export const APP_VERSION = '{int(time.time())}';",
+    txt,
+)
+if new != txt:
+    p.write_text(new, encoding='utf-8')
+PYEOF
+git add version.js 2>/dev/null
+exit 0
