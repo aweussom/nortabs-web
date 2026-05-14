@@ -251,11 +251,18 @@ def main():
     p.add_argument(
         "--rate-limit-per-min",
         type=int,
-        default=10,
-        help="Max requests per minute (default 10). Each call is ~1500-2000 "
-        "tokens total (system ~280 + user ~220 + output 500-1000), so 10 req/min "
-        "≈ 15-20k TPM — safely under the 20k TPM cap on the Q-Free resource. "
-        "Halve it (5) if sharing the resource with other tasks.",
+        default=25,
+        help="Max requests per minute (default 25). At ~700 tokens/call avg, "
+        "25 req/min ≈ 17.5k TPM, safely under the 20k TPM cap. Submission "
+        "rate cap — actual throughput is bounded by --concurrency × LLM latency.",
+    )
+    p.add_argument(
+        "--concurrency",
+        type=int,
+        default=5,
+        help="Max in-flight requests (default 5). Each Azure call takes "
+        "~12-15s, so concurrency=5 + 25 req/min cap fills ~20K TPM cleanly. "
+        "Set to 1 for strictly serial.",
     )
     p.add_argument("--max-consecutive-failures", type=int, default=3)
     args = p.parse_args()
@@ -366,34 +373,16 @@ def main():
     last_call = 0.0
     t0 = time.time()
 
-    current_locked_letter = None
     use_locks = legacy_enrichment is None
+    held_locks = set()
     skipped_letters_locked = set()
 
-    def acquire_for(letter):
-        nonlocal current_locked_letter
-        if not use_locks:
-            return True
-        if current_locked_letter == letter:
-            return True
-        if current_locked_letter is not None:
-            release_letter_lock(out_dir, current_locked_letter)
-            current_locked_letter = None
-        if try_acquire_letter_lock(out_dir, letter):
-            current_locked_letter = letter
-            return True
-        return False
-
+    # ── Build work queue ────────────────────────────────────────────────
+    work = []  # list of dicts: kind, ident, letter, system, user, label
     for kind, ident, payload, letter in iter_entries(catalog, letters_filter, reverse=args.reverse):
         if kind not in types:
             continue
         if not id_filter_allows(kind, ident):
-            continue
-        if not acquire_for(letter):
-            if letter not in skipped_letters_locked:
-                log(f"letter '{letter}' locked by another process, skipping")
-                skipped_letters_locked.add(letter)
-            skipped += 1
             continue
         if not args.force and is_already_done(kind, ident, letter):
             skipped += 1
@@ -405,9 +394,7 @@ def main():
             label = f"artist #{ident} [{letter}] '{payload['name']}'"
         else:
             tabs = payload["song"].get("tabs", [])
-            body_excerpt = (
-                tabs[0].get("body", "")[:800] if tabs else "(no tab body)"
-            )
+            body_excerpt = tabs[0].get("body", "")[:800] if tabs else "(no tab body)"
             system_msg = SONG_SYSTEM
             user_msg = SONG_USER.format(
                 artist=payload["artist_name"],
@@ -418,58 +405,116 @@ def main():
                 f"song #{ident} [{letter}] '{payload['artist_name']}'"
                 f" - '{payload['song']['name']}'"
             )
+        work.append({
+            "kind": kind, "ident": ident, "letter": letter,
+            "system": system_msg, "user": user_msg, "label": label,
+        })
 
-        if args.dry_run:
-            prompt_chars = len(system_msg) + len(user_msg)
-            log(f"[dry] would enrich {label} ({prompt_chars} char prompt: {len(system_msg)} system + {len(user_msg)} user)")
+    if args.dry_run:
+        for w in work[: args.limit or len(work)]:
+            prompt_chars = len(w["system"]) + len(w["user"])
+            log(f"[dry] would enrich {w['label']} ({prompt_chars} char prompt: "
+                f"{len(w['system'])} system + {len(w['user'])} user)")
             enriched += 1
-        else:
-            elapsed = time.time() - last_call
-            if elapsed < min_interval:
-                time.sleep(min_interval - elapsed)
+        total_t = time.time() - t0
+        log(f"done. enriched={enriched} skipped={skipped} failed={failed} in {total_t:.1f}s.")
+        return
 
-            log(f"enriching {label}…")
+    # ── Acquire letter locks for all letters in the queue ───────────────
+    if use_locks:
+        needed_letters = {w["letter"] for w in work}
+        for letter in needed_letters:
+            if try_acquire_letter_lock(out_dir, letter):
+                held_locks.add(letter)
+            elif letter not in skipped_letters_locked:
+                log(f"letter '{letter}' locked by another process, skipping its entries")
+                skipped_letters_locked.add(letter)
+        work = [w for w in work if w["letter"] in held_locks or not use_locks]
+
+    if args.limit and len(work) > args.limit:
+        work = work[: args.limit]
+
+    log(f"work queue: {len(work)} entries, concurrency={args.concurrency}, "
+        f"rate cap {args.rate_limit_per_min}/min")
+
+    # ── Concurrent execution ────────────────────────────────────────────
+    from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait
+    import threading
+
+    save_lock = threading.Lock()  # serialize letter-file writes within this process
+
+    def do_call(item):
+        """Worker: makes the Azure call. Returns (data, item)."""
+        try:
+            content = call_azure(client, deployment, item["system"], item["user"])
+            data = extract_json(content)
+            return ("ok", data, item)
+        except RateLimitError:
+            time.sleep(30)
             try:
-                content = call_azure(client, deployment, system_msg, user_msg)
+                content = call_azure(client, deployment, item["system"], item["user"])
                 data = extract_json(content)
-                last_call = time.time()
-            except RateLimitError:
-                log("  ! rate limit; sleeping 30s and retrying")
-                time.sleep(30)
-                try:
-                    content = call_azure(client, deployment, system_msg, user_msg)
-                    data = extract_json(content)
-                    last_call = time.time()
-                except Exception as e2:
-                    log(f"  ! failed after rate-limit retry: {e2}")
+                return ("ok", data, item)
+            except Exception as e2:
+                return ("fail", str(e2), item)
+        except Exception as e:
+            return ("fail", str(e), item)
+
+    queue_idx = 0
+    in_flight = {}
+    last_submit = 0.0
+
+    def maybe_submit():
+        nonlocal queue_idx, last_submit
+        if queue_idx >= len(work):
+            return False
+        elapsed = time.time() - last_submit
+        if elapsed < min_interval:
+            time.sleep(min_interval - elapsed)
+        item = work[queue_idx]
+        fut = executor.submit(do_call, item)
+        in_flight[fut] = item
+        log(f"submit [{queue_idx+1}/{len(work)}] {item['label']}")
+        queue_idx += 1
+        last_submit = time.time()
+        return True
+
+    executor = ThreadPoolExecutor(max_workers=args.concurrency)
+    try:
+        # Fill initial buffer
+        for _ in range(args.concurrency):
+            if not maybe_submit():
+                break
+
+        while in_flight:
+            done, _ = wait(list(in_flight.keys()), return_when=FIRST_COMPLETED)
+            for fut in done:
+                in_flight.pop(fut, None)
+                status, payload2, item = fut.result()
+                if status == "fail":
+                    log(f"  ! failed {item['label']}: {payload2}")
                     failed += 1
                     consec_fail += 1
                     if consec_fail >= args.max_consecutive_failures:
-                        log(f"  ! {consec_fail} consecutive failures — exiting")
+                        log(f"  ! {consec_fail} consecutive failures — bailing")
                         sys.exit(2)
-                    continue
-            except Exception as e:
-                log(f"  ! failed: {e}")
-                failed += 1
-                consec_fail += 1
-                if consec_fail >= args.max_consecutive_failures:
-                    log(f"  ! {consec_fail} consecutive failures — exiting")
-                    sys.exit(2)
-                continue
-
-            ld = get_letter_data(letter)
-            bucket = ld["artists"] if kind == "artist" else ld["songs"]
-            bucket[str(ident)] = data
-            persist(letter)
-            enriched += 1
-            consec_fail = 0
-
-        if args.limit and enriched >= args.limit:
-            log(f"reached --limit {args.limit}, stopping.")
-            break
-
-    if current_locked_letter is not None:
-        release_letter_lock(out_dir, current_locked_letter)
+                else:
+                    with save_lock:
+                        ld = get_letter_data(item["letter"])
+                        bucket = ld["artists"] if item["kind"] == "artist" else ld["songs"]
+                        bucket[str(item["ident"])] = payload2
+                        persist(item["letter"])
+                    enriched += 1
+                    consec_fail = 0
+                    log(f"done {item['label']}")
+            # Refill
+            while len(in_flight) < args.concurrency:
+                if not maybe_submit():
+                    break
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+        for letter in held_locks:
+            release_letter_lock(out_dir, letter)
 
     total = time.time() - t0
     log(f"done. enriched={enriched} skipped={skipped} failed={failed} in {total:.1f}s.")
