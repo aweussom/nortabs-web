@@ -378,10 +378,19 @@ def main():
             return ident in explicit_any_ids
         return True
 
-    letters_filter = (
-        {l.strip().lower() for l in args.letter.split(",") if l.strip()}
-        if args.letter else None
-    )
+    # Accept both "a,b,c" and concatenated "abc".
+    letters_filter = None
+    if args.letter:
+        letters_filter = set()
+        for piece in args.letter.split(","):
+            piece = piece.strip().lower()
+            if not piece:
+                continue
+            if len(piece) == 1:
+                letters_filter.add(piece)
+            else:
+                for c in piece:
+                    letters_filter.add(c)
     delay_s = args.delay_ms / 1000.0
 
     if not catalog_path.exists():

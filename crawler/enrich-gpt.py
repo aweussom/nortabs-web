@@ -331,11 +331,20 @@ def main():
             return ident in explicit_any_ids
         return True
 
-    letters_filter = (
-        {l.strip().lower() for l in args.letter.split(",") if l.strip()}
-        if args.letter
-        else None
-    )
+    # Accept both "a,b,c" and concatenated "abc" (and mixes like "abc,æ,ø").
+    letters_filter = None
+    if args.letter:
+        letters_filter = set()
+        for piece in args.letter.split(","):
+            piece = piece.strip().lower()
+            if not piece:
+                continue
+            if len(piece) == 1:
+                letters_filter.add(piece)
+            else:
+                # Multi-char piece: expand to individual characters
+                for c in piece:
+                    letters_filter.add(c)
     min_interval = 60.0 / max(1, args.rate_limit_per_min)
 
     if not catalog_path.exists():
