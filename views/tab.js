@@ -15,9 +15,11 @@ import {
 } from '../storage.js';
 import { escapeHtml } from '../util.js';
 import * as playback from '../playback.js';
+import { wrapTabBody, measureMaxCols } from '../chord-wrap.js';
 
 let _keyHandler = null;
 let _scrollListener = null;
+let _resizeHandler = null;
 
 function renderHeart(tabId) {
   return isInFavorites(tabId) ? '♥' : '♡';
@@ -120,6 +122,25 @@ export function renderTabUI(root, refs, backLink, opts = {}) {
 
   wirePicker(root, tab.id);
   wirePlayback(root, tab.id);
+  wireChordWrap(root, tab.body || '');
+}
+
+function wireChordWrap(root, rawBody) {
+  const preEl = root.querySelector('.tab-body');
+  if (!preEl) return;
+  const apply = () => {
+    if (!preEl.isConnected) return;
+    const cols = measureMaxCols(preEl);
+    preEl.textContent = wrapTabBody(rawBody, cols);
+  };
+  apply();
+  // Re-wrap on viewport change (orientation, browser-chrome show/hide, etc.).
+  let timer = null;
+  _resizeHandler = () => {
+    clearTimeout(timer);
+    timer = setTimeout(apply, 120);
+  };
+  window.addEventListener('resize', _resizeHandler, { passive: true });
 }
 
 function rerenderPicker(root, tabId) {
@@ -316,6 +337,10 @@ export function teardownTabBindings() {
   if (_scrollListener) {
     window.removeEventListener('scroll', _scrollListener);
     _scrollListener = null;
+  }
+  if (_resizeHandler) {
+    window.removeEventListener('resize', _resizeHandler);
+    _resizeHandler = null;
   }
   if (playback.isActive()) playback.stop();
 }
