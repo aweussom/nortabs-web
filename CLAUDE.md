@@ -47,6 +47,12 @@ The Python app is a **frozen reference**, not a sibling to keep in sync.
 
 `catalog.json` is `{ crawled_at, letters: { a: {artists: [...]}, b: {...}, ... } }`. Per-letter buckets — partial crawls remain valid. `catalog.js` is the only module that reads this shape; views call `getArtistsForLetter(l)` / `getArtist(id)` / `getSong(id)` / `getTab(id)`. The latter three return `{ artist|song|tab, ..., letter }` for back-link routing.
 
+## Cache-busting
+
+`version.js` exports `APP_VERSION` as a manual stamp. `catalog.js` appends `?v=${APP_VERSION}` to its `catalog.json` and `enrichment.json` fetches. Bump the version string when catalog shape changes, a new crawl/enrichment is pushed that users must pick up, or JS that depends on new data fields ships. Pure UI/JS tweaks don't need a bump — they ride the HTML's normal cache cycle and can't cause data/code mismatch.
+
+Format: `YYYY-MM-DD-N` (e.g. `2026-05-14-2`).
+
 ## Crawler
 
 `crawler/crawl.py` — zero-dep stdlib Python (urllib). Args: `--letters`, `--delay-ms` (default 100), `--user-agent`, `--checkpoint-dir` (default `crawler/data/`), `--out` (default `catalog.json`), `--merge-only`, `--force`. Per-letter checkpoint files in `crawler/data/<letter>.json` survive interruptions; the merge step assembles `catalog.json` from whatever checkpoints exist. Default delay 100 ms is "obviously polite"; full A-Z + 0-9 crawl is ~3 hours at 200 ms, ~9 MB gzipped catalog.

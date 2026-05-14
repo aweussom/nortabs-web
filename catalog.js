@@ -1,3 +1,5 @@
+import { APP_VERSION } from './version.js';
+
 let _data = null;
 const _byArtistId = new Map();
 const _bySongId = new Map();
@@ -5,7 +7,7 @@ const _byTabId = new Map();
 
 export async function loadCatalog() {
   if (_data) return _data;
-  const res = await fetch('catalog.json');
+  const res = await fetch(`catalog.json?v=${APP_VERSION}`);
   if (!res.ok) throw new Error(`Failed to load catalog.json: ${res.status}`);
   _data = await res.json();
   for (const [letter, bucket] of Object.entries(_data.letters ?? {})) {
@@ -24,7 +26,7 @@ export async function loadCatalog() {
 
 export async function loadEnrichment() {
   try {
-    const res = await fetch('enrichment.json');
+    const res = await fetch(`enrichment.json?v=${APP_VERSION}`);
     if (!res.ok) return null;
     return await res.json();
   } catch {
