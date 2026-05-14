@@ -168,8 +168,11 @@ li { margin: 0.25rem 0; }
   background-image: url('home-wordcloud.svg');
   background-repeat: no-repeat;
   background-position: center center;
-  background-size: 160% auto;       /* stor — fyller etter rotasjon */
-  transform: rotate(-28deg) scale(1.9);
+  /* Rotert SVG må holdes liten nok til at hjørnene ikke krysser
+   * viewport-grensen. cos(25°)+sin(25°) ≈ 1.33, så scale ≤ ~1.25
+   * holder seg innenfor når background-size er 100%. */
+  background-size: contain;
+  transform: rotate(-25deg) scale(1.25);
   transform-origin: center center;
   opacity: 0.45;
   pointer-events: none;
