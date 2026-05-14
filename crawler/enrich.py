@@ -258,7 +258,8 @@ def main():
     enrichment = load_enrichment(out_path)
 
     def log(msg):
-        print(msg, file=sys.stderr, flush=True)
+        ts = time.strftime("%H:%M:%S")
+        print(f"[{ts}] {msg}", file=sys.stderr, flush=True)
 
     def quota_check():
         """Returns (ok, message). ok=False means we should stop."""

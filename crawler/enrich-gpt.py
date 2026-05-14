@@ -149,7 +149,9 @@ def main():
     args = p.parse_args()
 
     endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
-    api_key = os.environ.get("AZURE_OPENAI_API_KEY")
+    # Accept either AZURE_OPENAI_API_KEY (script default) or AZURE_API_KEY
+    # (the shorter name used elsewhere in Tommy's tooling).
+    api_key = os.environ.get("AZURE_OPENAI_API_KEY") or os.environ.get("AZURE_API_KEY")
     deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT")
     api_version = os.environ.get("AZURE_OPENAI_API_VERSION", DEFAULT_API_VERSION)
 
@@ -194,7 +196,8 @@ def main():
         _, (_, RateLimitError) = _ensure_openai()
 
     def log(msg):
-        print(msg, file=sys.stderr, flush=True)
+        ts = time.strftime("%H:%M:%S")
+        print(f"[{ts}] {msg}", file=sys.stderr, flush=True)
 
     enriched = 0
     skipped = 0

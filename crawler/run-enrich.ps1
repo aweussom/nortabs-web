@@ -129,10 +129,10 @@ foreach ($letter in $letterArray) {
   $retry = 0
   while ($true) {
     Write-Log "running: python crawler/enrich.py --letter $letter (attempt $($retry + 1))"
+    # enrich.py prefixes its own [HH:MM:SS] timestamps now — pass through.
     python crawler/enrich.py --letter $letter --on-quota-limit exit 2>&1 | ForEach-Object {
-      $line = "[$(Get-Date -Format 'HH:mm:ss')]   $_"
-      Write-Host $line
-      Add-Content -Path $LogPath -Value $line -Encoding utf8
+      Write-Host $_
+      Add-Content -Path $LogPath -Value $_ -Encoding utf8
     }
     $rc = $LASTEXITCODE
 
