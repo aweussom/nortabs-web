@@ -64,9 +64,10 @@ $gptLog    = "crawler/enrich-gpt.log"
 
 function Start-Worker {
   param([string]$Label, [string]$Cmd, [string]$LogFile)
-  $inner = "$Cmd 2>&1 | Tee-Object -FilePath '$LogFile' -Encoding utf8 | ForEach-Object { Write-Host '[$Label] '`$_ }"
-  return Start-Process -FilePath powershell `
-    -ArgumentList @("-NoProfile", "-Command", "& { $inner }") `
+  # Use pwsh (PS 7+) — `Tee-Object -Encoding` doesn't exist in Windows PS 5.1.
+  $inner = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;`$OutputEncoding=[System.Text.Encoding]::UTF8;`$env:PYTHONIOENCODING='utf-8';$Cmd 2>&1 | Tee-Object -FilePath '$LogFile' -Encoding utf8 | ForEach-Object { Write-Host '[$Label] '`$_ }"
+  return Start-Process -FilePath pwsh `
+    -ArgumentList @("-NoProfile", "-NoLogo", "-Command", "& { $inner }") `
     -PassThru -NoNewWindow
 }
 
