@@ -35,6 +35,7 @@ Typical use:
 import argparse
 import json
 import os
+import signal
 import sys
 import time
 from pathlib import Path
@@ -46,6 +47,7 @@ from pathlib import Path
 # message. See ARTIST_SYSTEM / SONG_SYSTEM below.
 sys.path.insert(0, str(Path(__file__).parent))
 from enrich import (
+    clear_all_letter_locks,
     extract_json,
     iter_entries,
     load_enrichment,
@@ -265,7 +267,14 @@ def main():
         "Set to 1 for strictly serial.",
     )
     p.add_argument("--max-consecutive-failures", type=int, default=3)
+    p.add_argument("--clear-locks", action="store_true",
+                   help="Delete all stale enrichment/<letter>.lock files and exit.")
     args = p.parse_args()
+
+    if args.clear_locks:
+        n = clear_all_letter_locks(Path(args.out_dir))
+        print(f"removed {n} lock file(s) from {args.out_dir}", file=sys.stderr)
+        return
 
     endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
     # Accept either AZURE_OPENAI_API_KEY (script default) or AZURE_API_KEY
@@ -369,6 +378,7 @@ def main():
     enriched = 0
     skipped = 0
     failed = 0
+    filtered = 0
     consec_fail = 0
     last_call = 0.0
     t0 = time.time()
@@ -376,6 +386,17 @@ def main():
     use_locks = legacy_enrichment is None
     held_locks = set()
     skipped_letters_locked = set()
+
+    # Graceful Ctrl+C: release all held locks before exit.
+    def _sigint(signum, frame):
+        for letter in list(held_locks):
+            release_letter_lock(out_dir, letter)
+            held_locks.discard(letter)
+        print(f"\ninterrupted; released {len(held_locks)} lock(s)", file=sys.stderr, flush=True)
+        sys.exit(130)
+    signal.signal(signal.SIGINT, _sigint)
+    if hasattr(signal, 'SIGTERM'):
+        signal.signal(signal.SIGTERM, _sigint)
 
     # ── Build work queue ────────────────────────────────────────────────
     work = []  # list of dicts: kind, ident, letter, system, user, label
@@ -444,7 +465,7 @@ def main():
     save_lock = threading.Lock()  # serialize letter-file writes within this process
 
     def do_call(item):
-        """Worker: makes the Azure call. Returns (data, item)."""
+        """Worker: makes the Azure call. Returns (status, payload, item)."""
         try:
             content = call_azure(client, deployment, item["system"], item["user"])
             data = extract_json(content)
@@ -456,9 +477,18 @@ def main():
                 data = extract_json(content)
                 return ("ok", data, item)
             except Exception as e2:
-                return ("fail", str(e2), item)
+                return _classify(e2, item)
         except Exception as e:
-            return ("fail", str(e), item)
+            return _classify(e, item)
+
+    def _classify(e, item):
+        msg = str(e)
+        # Azure content-filter errors are NOT real failures — the prompt
+        # triggered the responsible-AI policy and retrying won't help.
+        # Don't count them toward the consec-fail bail-out.
+        if "content_filter" in msg.lower() or "ResponsibleAIPolicyViolation" in msg:
+            return ("filtered", msg[:120], item)
+        return ("fail", msg, item)
 
     queue_idx = 0
     in_flight = {}
@@ -491,7 +521,12 @@ def main():
             for fut in done:
                 in_flight.pop(fut, None)
                 status, payload2, item = fut.result()
-                if status == "fail":
+                if status == "filtered":
+                    # Azure responsible-AI blocked the prompt — log + skip,
+                    # do NOT count toward consec_fail or bail-out.
+                    log(f"  ⚠ content-filtered {item['label']}")
+                    filtered += 1
+                elif status == "fail":
                     log(f"  ! failed {item['label']}: {payload2}")
                     failed += 1
                     consec_fail += 1
@@ -517,7 +552,8 @@ def main():
             release_letter_lock(out_dir, letter)
 
     total = time.time() - t0
-    log(f"done. enriched={enriched} skipped={skipped} failed={failed} in {total:.1f}s.")
+    log(f"done. enriched={enriched} skipped={skipped} filtered={filtered} "
+        f"failed={failed} in {total:.1f}s.")
     if not args.dry_run:
         log(f"out: {legacy_out_path if legacy_out_path else out_dir}")
 

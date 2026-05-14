@@ -28,6 +28,7 @@ Zero dependencies (stdlib only).
 import argparse
 import json
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -144,6 +145,21 @@ def write_enrichment(path, data, model_tag):
     data.setdefault("version", 1)
     text = json.dumps(data, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     path.write_text(text, encoding="utf-8")
+
+
+def clear_all_letter_locks(out_dir):
+    """Delete every <letter>.lock file under out_dir. Use after a crash or
+    Ctrl+C left stale locks behind."""
+    if not out_dir.exists():
+        return 0
+    n = 0
+    for f in out_dir.glob("*.lock"):
+        try:
+            f.unlink()
+            n += 1
+        except FileNotFoundError:
+            pass
+    return n
 
 
 def try_acquire_letter_lock(out_dir, letter, stale_sec=3600):
@@ -323,10 +339,19 @@ def main():
     p.add_argument("--max-consecutive-failures", type=int, default=3,
                    help="Bail out after N CLI failures in a row (default 3). "
                         "Safety net for when the quota cache is stale.")
+    p.add_argument("--clear-locks", action="store_true",
+                   help="Delete all stale enrichment/<letter>.lock files and exit. "
+                        "Use after a Ctrl+C / crash that left locks behind.")
     args = p.parse_args()
 
     catalog_path = Path(args.catalog)
     out_dir = Path(args.out_dir)
+
+    if args.clear_locks:
+        n = clear_all_letter_locks(out_dir)
+        print(f"removed {n} lock file(s) from {out_dir}", file=sys.stderr)
+        return
+
     legacy_out_path = Path(args.out) if args.out else None
     cli_cmd = args.cli.split()
     types = {t.strip() for t in args.types.split(",") if t.strip()}
@@ -438,6 +463,15 @@ def main():
             current_locked_letter = letter
             return True
         return False
+
+    # Graceful Ctrl+C: release any held lock before exiting.
+    def _sigint(signum, frame):
+        if current_locked_letter is not None:
+            release_letter_lock(out_dir, current_locked_letter)
+        print("\ninterrupted; lock released", file=sys.stderr, flush=True)
+        sys.exit(130)
+    signal.signal(signal.SIGINT, _sigint)
+    signal.signal(signal.SIGTERM, _sigint) if hasattr(signal, 'SIGTERM') else None
 
     # Pre-flight quota check
     ok, msg = quota_check()
