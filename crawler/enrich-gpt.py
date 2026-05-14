@@ -1,28 +1,33 @@
 #!/usr/bin/env python3
-"""LLM enrichment via Azure OpenAI (e.g. GPT-5-mini).
+"""LLM enrichment via Azure OpenAI (e.g. gpt-5-mini).
 
 Mirror of crawler/enrich.py that hits an Azure OpenAI deployment instead of
 the local `claude` CLI. Useful for:
-  - Benchmarking enrichment quality between Sonnet 4.6 and GPT-5-mini
+  - Benchmarking enrichment quality between Sonnet 4.6 and gpt-5-mini
   - Filling entries without burning the Claude Max quota
   - Side-by-side comparison: output goes to enrichment-gpt.json by default
-    so it doesn't clobber the canonical enrichment.json
+    so it doesn't clobber the canonical enrichment.json (Sonnet output).
 
-Uses Azure's `response_format: {"type":"json_object"}` so the model is
-guaranteed to return valid JSON — this avoids the parse failures we
-occasionally see with Claude (unquoted keys, single quotes, etc.).
+Quirks baked in for the Q-Free NOC resource (per project notes):
+  - api_version pinned to 2024-12-01-preview (minimum for chat.completions
+    on this resource).
+  - No `temperature` kwarg — gpt-5-mini errors out on anything except the
+    default 1.0.
+  - /responses API is region-locked off here; stick with chat.completions.
+    Worth re-testing ~2026-08-06 — if it opens, swap to client.responses.create
+    unchanged otherwise.
 
-Reads Azure config from environment variables:
-  AZURE_OPENAI_ENDPOINT     e.g. https://my-resource.openai.azure.com
-  AZURE_OPENAI_API_KEY      the secret
-  AZURE_OPENAI_DEPLOYMENT   e.g. gpt-5-mini
-  AZURE_OPENAI_API_VERSION  optional, default 2024-08-01-preview
+Config via environment variables:
+  AZURE_OPENAI_ENDPOINT       e.g. https://...openai.azure.com
+  AZURE_OPENAI_API_KEY        the secret
+  AZURE_OPENAI_DEPLOYMENT     e.g. gpt-5-mini (deployment NAME, not family)
+  AZURE_OPENAI_API_VERSION    optional, default 2024-12-01-preview
 
-Zero dependencies (stdlib urllib only). Reuses prompts and helpers from
-enrich.py so prompt structure is identical for fair quality comparison.
+Requires `pip install openai`. Reuses prompts and helpers from enrich.py
+so prompt structure is identical for fair quality comparison.
 
 Typical use:
-    $env:AZURE_OPENAI_ENDPOINT   = "https://...azure.com"
+    $env:AZURE_OPENAI_ENDPOINT   = "https://...openai.azure.com"
     $env:AZURE_OPENAI_API_KEY    = "..."
     $env:AZURE_OPENAI_DEPLOYMENT = "gpt-5-mini"
     python crawler/enrich-gpt.py --letter å --limit 5
@@ -32,8 +37,6 @@ import json
 import os
 import sys
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 # Reuse prompts and shared helpers from the Claude enrich script.
@@ -48,33 +51,71 @@ from enrich import (
     write_enrichment,
 )
 
-DEFAULT_API_VERSION = "2024-08-01-preview"
+DEFAULT_API_VERSION = "2024-12-01-preview"
 DEFAULT_MODEL_TAG = "azure-openai-gpt5-mini"
 
+# Deferred — only required when actually making calls, so --dry-run works
+# without the openai SDK installed.
+_openai_mod = None
+_openai_errors = None
 
-def call_azure(prompt, endpoint, deployment, api_key, api_version, timeout=60):
-    """POST to Azure OpenAI chat completions. Returns the model's content string."""
-    url = (
-        f"{endpoint.rstrip('/')}/openai/deployments/{deployment}/chat/completions"
-        f"?api-version={api_version}"
+
+def _ensure_openai():
+    """Lazy-import openai SDK. Exits with a clear message if missing."""
+    global _openai_mod, _openai_errors
+    if _openai_mod is not None:
+        return _openai_mod, _openai_errors
+    try:
+        from openai import AzureOpenAI, APIStatusError, RateLimitError
+    except ImportError:
+        print(
+            "missing dependency: pip install openai\n"
+            "(only crawler/enrich-gpt.py needs this; enrich.py via "
+            "`claude -p` has no such dependency.)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    _openai_mod = AzureOpenAI
+    _openai_errors = (APIStatusError, RateLimitError)
+    return _openai_mod, _openai_errors
+
+
+def make_client(endpoint, api_key, api_version):
+    AzureOpenAI, _ = _ensure_openai()
+    return AzureOpenAI(
+        api_key=api_key,
+        api_version=api_version,
+        azure_endpoint=endpoint,
+        timeout=120,
     )
-    body = json.dumps({
-        "messages": [{"role": "user", "content": prompt}],
-        "response_format": {"type": "json_object"},
-        "max_completion_tokens": 1500,
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=body,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "api-key": api_key,
-        },
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    return data["choices"][0]["message"]["content"]
+
+
+def call_azure(client, deployment, prompt):
+    """One round-trip to the deployment. Returns the model's content string.
+
+    Notes:
+      - No `temperature` — gpt-5-mini rejects anything except default 1.0.
+      - `response_format={"type":"json_object"}` guarantees valid JSON when
+        supported. If the deployment errors on it, retry once without and
+        rely on extract_json()'s best-effort parsing.
+    """
+    _, (APIStatusError, _RateLimitError) = _ensure_openai()
+    try:
+        resp = client.chat.completions.create(
+            model=deployment,  # deployment NAME (not family)
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+        )
+    except APIStatusError as e:
+        # Some deployments don't support response_format — retry plain.
+        if e.status_code == 400 and "response_format" in str(e).lower():
+            resp = client.chat.completions.create(
+                model=deployment,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        else:
+            raise
+    return resp.choices[0].message.content
 
 
 def main():
@@ -100,8 +141,9 @@ def main():
         "--rate-limit-per-min",
         type=int,
         default=25,
-        help="Max requests per minute (default 25, safe under 20k TPM cap "
-        "for ~700-token requests).",
+        help="Max requests per minute (default 25). At ~700 tokens/request "
+        "this stays under 20k TPM; halve it (12-13) to stay under 10k TPM "
+        "shared-resource caps.",
     )
     p.add_argument("--max-consecutive-failures", type=int, default=3)
     args = p.parse_args()
@@ -144,6 +186,13 @@ def main():
     catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
     enrichment = load_enrichment(out_path)
 
+    if args.dry_run:
+        client = None
+        RateLimitError = Exception  # placeholder, never raised in dry-run
+    else:
+        client = make_client(endpoint, api_key, api_version)
+        _, (_, RateLimitError) = _ensure_openai()
+
     def log(msg):
         print(msg, file=sys.stderr, flush=True)
 
@@ -153,11 +202,6 @@ def main():
     consec_fail = 0
     last_call = 0.0
     t0 = time.time()
-
-    def do_call(prompt):
-        return extract_json(
-            call_azure(prompt, endpoint, deployment, api_key, api_version)
-        )
 
     for kind, ident, payload, letter in iter_entries(catalog, letters_filter):
         if kind not in types:
@@ -197,25 +241,18 @@ def main():
 
             log(f"enriching {label}…")
             try:
-                data = do_call(prompt)
+                content = call_azure(client, deployment, prompt)
+                data = extract_json(content)
                 last_call = time.time()
-            except urllib.error.HTTPError as e:
-                if e.code == 429:
-                    log("  ! 429 rate limit; sleeping 30s and retrying")
-                    time.sleep(30)
-                    try:
-                        data = do_call(prompt)
-                        last_call = time.time()
-                    except Exception as e2:
-                        log(f"  ! failed after 429 retry: {e2}")
-                        failed += 1
-                        consec_fail += 1
-                        if consec_fail >= args.max_consecutive_failures:
-                            log(f"  ! {consec_fail} consecutive failures — exiting")
-                            sys.exit(2)
-                        continue
-                else:
-                    log(f"  ! HTTP {e.code}: {e.reason}")
+            except RateLimitError:
+                log("  ! rate limit; sleeping 30s and retrying")
+                time.sleep(30)
+                try:
+                    content = call_azure(client, deployment, prompt)
+                    data = extract_json(content)
+                    last_call = time.time()
+                except Exception as e2:
+                    log(f"  ! failed after rate-limit retry: {e2}")
                     failed += 1
                     consec_fail += 1
                     if consec_fail >= args.max_consecutive_failures:
