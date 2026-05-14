@@ -147,6 +147,23 @@ export function removeFromSongbook(songbookId, tabId) {
   return true;
 }
 
+/**
+ * Move a tab one step within a songbook. direction: -1 for up, +1 for down.
+ * No-op when already at the boundary. Returns true on success.
+ */
+export function moveTabInSongbook(songbookId, tabId, direction) {
+  const data = read();
+  const sb = data.songbooks.find(s => s.id === songbookId);
+  if (!sb) return false;
+  const i = sb.tab_ids.indexOf(tabId);
+  if (i < 0) return false;
+  const j = i + direction;
+  if (j < 0 || j >= sb.tab_ids.length) return false;
+  [sb.tab_ids[i], sb.tab_ids[j]] = [sb.tab_ids[j], sb.tab_ids[i]];
+  write(data);
+  return true;
+}
+
 export function getSongbooksContaining(tabId) {
   return read().songbooks.filter(s => s.tab_ids.includes(tabId));
 }

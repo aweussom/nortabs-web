@@ -1,4 +1,10 @@
-import { getSongbook, removeFromSongbook, renameSongbook, deleteSongbook } from '../storage.js';
+import {
+  getSongbook,
+  removeFromSongbook,
+  renameSongbook,
+  deleteSongbook,
+  moveTabInSongbook,
+} from '../storage.js';
 import { getTab } from '../catalog.js';
 import { escapeHtml } from '../util.js';
 import { buildExportHTML, exportFilename } from '../exporter.js';
@@ -18,16 +24,23 @@ export function render(state, root) {
   }
 
   const sbParam = `?sb=${encodeURIComponent(sb.id)}`;
-  const tabRows = sb.tab_ids.map(tid => {
+  const total = sb.tab_ids.length;
+  const tabRows = sb.tab_ids.map((tid, idx) => {
+    const reorderBtns = `
+      <button data-action="up" data-tab="${tid}" ${idx === 0 ? 'disabled' : ''} title="Flytt opp">↑</button>
+      <button data-action="down" data-tab="${tid}" ${idx === total - 1 ? 'disabled' : ''} title="Flytt ned">↓</button>
+    `;
     const r = getTab(tid);
     if (!r) {
       return `<li class="missing">
+        <span class="reorder">${reorderBtns}</span>
         <span class="muted">Tab #${tid} (ikke i lokal katalog)</span>
         <button data-action="remove" data-tab="${tid}">Fjern</button>
       </li>`;
     }
     const { tab, song, artist } = r;
     return `<li>
+      <span class="reorder">${reorderBtns}</span>
       <a href="#/tab/${tab.id}${sbParam}">${escapeHtml(artist.name)} &mdash; ${escapeHtml(song.name)}</a>
       <button data-action="remove" data-tab="${tab.id}">Fjern</button>
     </li>`;
@@ -115,6 +128,15 @@ export function render(state, root) {
     btn.addEventListener('click', () => {
       const tid = Number(btn.dataset.tab);
       removeFromSongbook(sb.id, tid);
+      render(state, root);
+    });
+  }
+
+  for (const btn of root.querySelectorAll('button[data-action="up"], button[data-action="down"]')) {
+    btn.addEventListener('click', () => {
+      const tid = Number(btn.dataset.tab);
+      const dir = btn.dataset.action === 'up' ? -1 : 1;
+      moveTabInSongbook(sb.id, tid, dir);
       render(state, root);
     });
   }
