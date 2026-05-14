@@ -226,6 +226,18 @@ def main():
     p.add_argument("--force", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument(
+        "--reverse",
+        action="store_true",
+        help="Iterate letters in reverse. Use this with enrich.py running "
+        "forward so they meet in the middle.",
+    )
+    p.add_argument(
+        "--cross-check",
+        default="",
+        help="Path to another enrichment file (e.g. enrichment.json). Entries "
+        "present there are skipped, so two parallel enrichers don't duplicate work.",
+    )
+    p.add_argument(
         "--rate-limit-per-min",
         type=int,
         default=10,
@@ -304,6 +316,32 @@ def main():
     catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
     enrichment = load_enrichment(out_path)
 
+    cross_path = Path(args.cross_check) if args.cross_check else None
+    cross_data = (
+        load_enrichment(cross_path) if (cross_path and cross_path.exists()) else None
+    )
+    cross_last_read = time.time()
+
+    def is_already_done(kind, ident):
+        nonlocal cross_data, cross_last_read
+        bucket = enrichment["artists"] if kind == "artist" else enrichment["songs"]
+        if str(ident) in bucket:
+            return True
+        if cross_path is not None:
+            if time.time() - cross_last_read > 30 and cross_path.exists():
+                try:
+                    cross_data = load_enrichment(cross_path)
+                except Exception:
+                    pass
+                cross_last_read = time.time()
+            if cross_data:
+                cbucket = cross_data.get(
+                    "artists" if kind == "artist" else "songs", {}
+                )
+                if str(ident) in cbucket:
+                    return True
+        return False
+
     if args.dry_run:
         client = None
         RateLimitError = Exception  # placeholder, never raised in dry-run
@@ -322,13 +360,13 @@ def main():
     last_call = 0.0
     t0 = time.time()
 
-    for kind, ident, payload, letter in iter_entries(catalog, letters_filter):
+    for kind, ident, payload, letter in iter_entries(catalog, letters_filter, reverse=args.reverse):
         if kind not in types:
             continue
         if not id_filter_allows(kind, ident):
             continue
         bucket = enrichment["artists"] if kind == "artist" else enrichment["songs"]
-        if not args.force and str(ident) in bucket:
+        if not args.force and is_already_done(kind, ident):
             skipped += 1
             continue
 

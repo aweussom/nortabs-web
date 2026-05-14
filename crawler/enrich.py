@@ -144,15 +144,20 @@ def write_enrichment(path, data, model_tag):
     path.write_text(text, encoding="utf-8")
 
 
-def iter_entries(catalog, letters_filter=None):
+def iter_entries(catalog, letters_filter=None, reverse=False):
     """Yields ('artist'|'song', id, payload, letter) tuples in catalog order.
 
     `letters_filter`: optional iterable of letter codes ('a','b','å',...) to
     restrict iteration to. None = all letters.
+    `reverse`: True = iterate letters in reverse (useful when running two
+    enrichers in parallel from opposite ends so they meet in the middle).
     """
     all_letters = catalog.get("letters") or {}
     wanted = None if letters_filter is None else set(letters_filter)
-    for letter, bucket in all_letters.items():
+    items = list(all_letters.items())
+    if reverse:
+        items = list(reversed(items))
+    for letter, bucket in items:
         if wanted is not None and letter not in wanted:
             continue
         for artist in bucket.get("artists", []):
@@ -233,6 +238,14 @@ def main():
     p.add_argument("--letter", default="",
                    help="Restrict to one or more catalog letters (comma-separated, "
                         "e.g. 'a' or 'å,æ,ø'). Default: all letters.")
+    p.add_argument("--reverse", action="store_true",
+                   help="Iterate letters in reverse order. Useful when running "
+                        "this and enrich-gpt.py in parallel from opposite ends "
+                        "so they meet in the middle.")
+    p.add_argument("--cross-check", default="",
+                   help="Path to another enrichment file (e.g. enrichment-gpt.json). "
+                        "Entries present there are also skipped, so two parallel "
+                        "enrichers don't duplicate work.")
     p.add_argument("--quota-threshold-pct", type=int, default=90,
                    help="Stop when claude-code-quota cache reports 5h usage >= "
                         "this %% (default 90). 0 disables quota check.")
@@ -284,6 +297,31 @@ def main():
     catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
     enrichment = load_enrichment(out_path)
 
+    # Cross-check file (the other enricher's output). Re-read lazily during
+    # the run so newly-completed entries from the other process get skipped.
+    cross_path = Path(args.cross_check) if args.cross_check else None
+    cross_data = load_enrichment(cross_path) if (cross_path and cross_path.exists()) else None
+    cross_last_read = time.time()
+
+    def is_already_done(kind, ident):
+        nonlocal cross_data, cross_last_read
+        bucket = enrichment["artists"] if kind == "artist" else enrichment["songs"]
+        if str(ident) in bucket:
+            return True
+        if cross_path is not None:
+            # Re-read cross file every 30s so we pick up the other process's progress.
+            if time.time() - cross_last_read > 30 and cross_path.exists():
+                try:
+                    cross_data = load_enrichment(cross_path)
+                except Exception:
+                    pass
+                cross_last_read = time.time()
+            if cross_data:
+                cbucket = cross_data.get("artists" if kind == "artist" else "songs", {})
+                if str(ident) in cbucket:
+                    return True
+        return False
+
     def log(msg):
         ts = time.strftime("%H:%M:%S")
         print(f"[{ts}] {msg}", file=sys.stderr, flush=True)
@@ -321,13 +359,13 @@ def main():
     if not ok:
         handle_quota_limit(msg)
 
-    for kind, ident, payload, letter in iter_entries(catalog, letters_filter):
+    for kind, ident, payload, letter in iter_entries(catalog, letters_filter, reverse=args.reverse):
         if kind not in types:
             continue
         if not id_filter_allows(kind, ident):
             continue
         bucket = enrichment["artists"] if kind == "artist" else enrichment["songs"]
-        if not args.force and str(ident) in bucket:
+        if not args.force and is_already_done(kind, ident):
             skipped += 1
             continue
 
