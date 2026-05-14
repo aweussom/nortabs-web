@@ -102,6 +102,15 @@ body {
 #search-results [data-frame="empty"] {
   color: var(--muted);
 }
+#search-results .fallthrough-link {
+  margin: 0.5rem 0 0;
+  padding-top: 0.4rem;
+  border-top: 1px dashed var(--border);
+  font-size: 0.85rem;
+  text-align: right;
+}
+#search-results .fallthrough-link a { color: var(--muted); }
+#search-results .fallthrough-link a:hover { color: var(--link); }
 
 #app {
   max-width: 720px;
