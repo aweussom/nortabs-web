@@ -9,17 +9,20 @@ export function render(state, root) {
 
   if (route.name === 'home') {
     root.innerHTML = `
-      <h1>NorTabs</h1>
-      <nav class="letter-grid">
-        ${LETTERS.map(l => {
-          const has = getArtistsForLetter(l) !== null;
-          const label = l.toUpperCase();
-          return has
-            ? `<a href="#/letter/${l}">${label}</a>`
-            : `<span class="disabled">${label}</span>`;
-        }).join('')}
-      </nav>
-      <p class="home-links"><a href="#/songbooks">Sangbøker &rarr;</a></p>
+      <div class="home-wordcloud" aria-hidden="true"></div>
+      <div class="home-content">
+        <h1>NorTabs</h1>
+        <nav class="letter-grid">
+          ${LETTERS.map(l => {
+            const has = getArtistsForLetter(l) !== null;
+            const label = l.toUpperCase();
+            return has
+              ? `<a href="#/letter/${l}">${label}</a>`
+              : `<span class="disabled">${label}</span>`;
+          }).join('')}
+        </nav>
+        <p class="home-links"><a href="#/songbooks">Sangbøker &rarr;</a></p>
+      </div>
     `;
     return;
   }
