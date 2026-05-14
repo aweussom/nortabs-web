@@ -13,6 +13,8 @@ let _artistIndex = new Map(); // token → Set<artistId>
 let _songIndex = new Map();   // token → Set<songId>
 let _bodyIndex = new Map();   // token → Set<tabId>
 let _allTokens = [];          // sorted array of unique tokens (for prefix scan)
+let _bodyIdf = new Map();     // token → IDF-style weight (rare tokens > common ones)
+let _totalTabs = 0;
 
 let _artistById = new Map();
 let _songById = new Map();
@@ -79,11 +81,26 @@ export function buildIndex(catalog, enrichment) {
   }
 
   _allTokens = [...allTokenSet].sort();
+
+  // Precompute IDF for body tokens: rare tokens get high weight, common ones
+  // (jeg, vil, på, ...) get near-zero. Helps lyric search match the
+  // distinctive part of a phrase rather than the filler.
+  _totalTabs = _tabById.size || 1;
+  _bodyIdf = new Map();
+  for (const [token, set] of _bodyIndex) {
+    const df = set.size;
+    // smooth log IDF, clamped to [0.05, 1.0]
+    const raw = Math.log((_totalTabs + 1) / (df + 1));
+    const maxRaw = Math.log(_totalTabs + 1);
+    _bodyIdf.set(token, Math.max(0.05, Math.min(1.0, raw / maxRaw)));
+  }
+
   return {
     artistTokens: _artistIndex.size,
     songTokens: _songIndex.size,
     bodyTokens: _bodyIndex.size,
     uniqueTokens: _allTokens.length,
+    totalTabs: _totalTabs,
   };
 }
 
@@ -149,6 +166,8 @@ export function search(query, opts = {}) {
   let anyHit = false;
 
   for (const qt of tokens) {
+    // Artist / song name indexes use prefix matching — typing "rybak" should
+    // find "rybak" entries even if the user only typed "ryba".
     const matched = prefixMatches(qt);
     for (const t of matched) {
       const exactBonus = t === qt ? 1.0 : 0.6;
@@ -160,10 +179,16 @@ export function search(query, opts = {}) {
         bumpScore(songScores, sid, exactBonus * 5);
         anyHit = true;
       }
-      for (const tid of (_bodyIndex.get(t) ?? [])) {
-        bumpScore(tabScores, tid, exactBonus * 1);
-        anyHit = true;
-      }
+    }
+    // Body index uses EXACT match only. Prefix expansion on body causes
+    // false positives ("min" → "minutter", "jeg" → "jegere"), inflating
+    // bodies that don't actually contain the query phrase. IDF weighting
+    // further suppresses common-token noise (jeg, på, vil) so songs with
+    // the *distinctive* part of a phrase (tjene, kroppen) float to the top.
+    const idf = _bodyIdf.get(qt) ?? 0.5;
+    for (const tid of (_bodyIndex.get(qt) ?? [])) {
+      bumpScore(tabScores, tid, idf * 4);
+      anyHit = true;
     }
   }
 
