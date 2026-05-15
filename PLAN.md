@@ -4,10 +4,17 @@ A static, single-page rewrite of `C:\devel\python\nortabs-app` (a Flet Python de
 
 ## Why this exists
 
-The owner of nortabs.no has shipped his own ad-supported app. Tommy has his explicit blessing to use the API but does **not** want to compete commercially or take ad revenue. This rewrite is a hobby project to:
+Two motivations, in order:
 
-1. Fix what frustrates him on nortabs.no: **bad search**, **no shareable songbooks**, **slow page loads**.
-2. Be polite about API usage — the live site should hit nortabs.net's API as little as possible. Almost all browsing happens against a pre-crawled static catalog. Only the nightly crawler talks to the API.
+**1. A constraint as creative driver.** Someone wrote Windows 95 as a JavaScript emulator running in a browser tab. Reading about that prompted a rule for web apps:
+
+> **If it can be done in JavaScript, it shall be done in JavaScript.**
+
+No bundler, no transpiler, no framework, no backend. Vanilla ES modules + one HTML file + one `<div id="app">`. Open `index.html` in any browser and it works; offline too. The catalog ships as one ~5 MB gzipped JSON embedded in the page. The shipped web app makes zero network calls to nortabs.net — only the nightly crawler does that, and only the server-side crawler runs Python. The goal is to find out how far the "browser is a complete computer" idea goes when taken seriously.
+
+**2. Build a search engine that isn't stupid.** Most search is a substring match with Levenshtein on top. That's fine when you remember the title; it falls apart the moment you want to search by *vibe*. The Flet desktop app that came first (see [`nortabs-app`](C:\devel\python\nortabs-app)) was already obsoleted by nortabs.no's own official app, so the only reason to keep building was: how good can search get when an LLM-generated semantic layer feeds an in-browser inverted index with hand-tuned weighting? See the [Search](#search--current-state-and-journey) section — it's most of what this project actually *is*.
+
+A polite-to-the-API constraint sits underneath both: explicit blessing from the nortabs.net owner, no ads, no tracking, no account, and almost all browsing happens against the pre-crawled static catalog so the live site barely touches their servers.
 
 ## Constraints and decisions (already settled)
 
@@ -23,7 +30,7 @@ The owner of nortabs.no has shipped his own ad-supported app. Tommy has his expl
 | Crawler | Scheduled GitHub Action — **incremental Mon-Sat + full Sun**, Python stdlib only | Daily incremental diffs `/collections/browse` (which carries `tab_count` + `song_count` per artist) against the existing catalog and only fetches changed artists/songs/tabs. Typical no-change night: ~80 reqs / ~1 min. Sunday full crawl: ~15 600 reqs at 200 ms ≈ 52 min, catches tab-body edits and same-count tab swaps that incremental can't see. Per-letter checkpoints in `crawler/data/<letter>.json` make crawls resumable. Commits updated `catalog.json` back to the repo. |
 | API access pattern | Crawler only. **The shipped web app never hits nortabs.net for data.** Search fall-through is the only browser→nortabs touchpoint, and it just opens nortabs.net in a new tab (no embedding, no CORS). | Reduces load on the owner's API; site stays fast and offline-capable. |
 | Search fall-through | When local search returns 0 hits, show a "Søk live på nortabs.net" link that opens `https://nortabs.net/?q=...` in a new tab. No embedding, no proxy. | Honest UX; preserves offline-first; zero CORS/infra cost. |
-| LLM enrichment | Sidecar `enrichment.json` produced by a **local cron job on Tommy's machine**, not in GitHub Actions. Invokes a local LLM CLI (copilot-cli with free Haiku, or claude-code with Sonnet 4.6). Pushes only the sidecar back to the repo. | Keeps API keys out of CI; cron uses existing local subscriptions. Crawler stays simple and free. |
+| LLM enrichment | Sidecar `enrichment.json` produced by a **Windows Task Scheduler job at 06:00 Oslo on Tommy's machine**, not in GitHub Actions. `scheduled-enrich.ps1` pulls latest catalog, calls `run-enrich.ps1` (Claude via `claude -p --model sonnet`), commits + pushes the sidecar. Optional parallel path: `run-enrich-parallel.ps1` adds an OpenAI API worker on a disjoint letter set. | Keeps API keys + LLM bills out of CI; the scheduler uses Tommy's existing personal subscriptions. Crawler stays simple and free. |
 | CORS | Not relevant for the running app (no live API calls). Only the crawler hits the API, server-to-server. | — |
 
 ## Measured data sizes (full A-Z + 0-9 crawl, 2026-05-14)
@@ -46,6 +53,88 @@ When in doubt about UX or data flow, read the existing app at `C:\devel\python\n
 - **Auto-scroll playback**: `app.py` — `start_playback`, `start_preparation_countdown`, `start_auto_scroll`. The 5-second countdown UX should carry over.
 
 The Python app does **not** need to be kept in sync — it's a frozen reference.
+
+## Search — current state and journey
+
+Search is the star player. Everything else (browse, songbooks, auto-scroll, exports) is plumbing around it. The current implementation lives entirely in [`search.js`](search.js) — about 360 lines, zero dependencies, runs entirely in the browser against the embedded catalog + enrichment.
+
+### Current capabilities
+
+**Indexes**, built once at page load:
+
+- `_artistIndex: Map<token, Set<artistId>>` — fed by artist name + LLM `search_text` + (for pseudo-artists) hand-curated tag string + token-alias expansions.
+- `_songIndex: Map<token, Set<songId>>` — fed by artist name + artist enrichment + song name + song enrichment.
+- `_bodyIndex: Map<token, Set<tabId>>` — fed by tab body (the chord-over-lyric text).
+- `_artistIdf / _songIdf / _bodyIdf` — IDF weights, `log((total+1)/(df+1))` clamped to `[0.05, 1.0]`. Distinctive tokens (`tjene`, `kroppen`, `fairytale`) win; filler tokens (`jeg`, `vil`, `på`) lose.
+
+**Query pipeline**, in order:
+
+1. **Fold** the query: lowercase, then `ø→o`, `æ→a`, `å→a`, then bigram aliases `oe→o`, `ae→a`, `aa→a`, then NFD-normalize and strip remaining diacritics. `Bjørn`, `bjoern`, `bjorn`, `BJØRN` collapse to the same token.
+2. **Tokenize and classify**: ≤3 tokens → *exploratory*, 4+ tokens → *phrase*. Phrase mode disables the name indexes entirely, so the pasted lyric `jeg vil tjene penger på kroppen min` lands on the song via body match alone — `jeg`/`vil`/`på` can no longer drag every artist named "Vilde" into the song frame.
+3. **Match**:
+   - Short queries get prefix-expanded against `_allTokens` (sorted, binary search). Exact match scores ×1.0, prefix match scores ×0.6. Artist hits weighted ×10 × `artistIdf`, song hits ×5 × `songIdf`.
+   - Body matches are always exact, weighted by `bodyIdf × 4`.
+4. **Songbook boost**: any tab in the user's local songbooks gets a **×4 score multiplier**. The user's own taste re-weights everything.
+5. **Body → song propagation**: the best body match per song boosts that song's score by ×3 of its max tab score. A lyric query surfaces the *song* on the songs frame, not just an isolated tab number.
+6. **Multi-tab dedup**: body propagation uses `MAX` across the song's tabs, not `SUM`. A popular song with five user-uploaded tabs no longer auto-wins over a niche song with one tab.
+7. **Three result frames**: Songs → Artists → Lyrics, twenty entries each, sorted by `(score desc, hits desc)`.
+8. **"Mente du …?"**: only when zero hits *and* the query is a single token. Damerau-Levenshtein distance ≤ 2 against `_allTokens`, early-exit at distance 1. Multi-token zero-hit suggestions are usually worse than nothing.
+9. **Fall-through**: a `Søk live på nortabs.net` link is always rendered at the bottom of the result list (zero-hit *or* with-hits), opening `https://nortabs.net/?q=...` in a new tab. Honest UX, no embedding, no CORS.
+
+### Two hand-curated layers on top of the LLM enrichment
+
+Most semantic metadata is LLM-generated and lives in `enrichment.json`. Two small data tables in `search.js` sit on top:
+
+- **`PSEUDO_ARTIST_TAGS`** — eight nortabs.net "artists" are actually thematic buckets (Lovsanger, Julesanger, Barnesanger, Fotballsanger, Salmer, 17. mai-sanger, Sørlandsviser, Folkeviser). LLM enrichment treats them as obscure artists and produces thin tags. Each gets a hand-picked synonym string instead, so `jul`, `advent`, `gospel`, `kirke`, `tilbedelse`, `kystkultur`, `fedreland` etc. all resolve. Cutoff: ≥7 songs per bucket. Children inherit the tags through the existing artist-enrichment path.
+- **`TOKEN_ALIASES`** — equivalence groups for tokens that mean the same place. `[trondheim, trondhjem, tronder, tronderrock, trondelag, nidaros]` collapse into one search class; same for Oslo/Kristiania/Christiania, Bergen/bergensk/bergenser, Stavanger/siddis. Members must be written in folded form. Append as gaps surface.
+
+Both are small, append-only data tables. No plumbing, no migration step.
+
+### The LLM enrichment pipeline
+
+`enrichment.json` carries the semantic layer that makes "search by vibe" work. Per-artist fields: `country`, `region`, `era`, `genre[]`, `notable`, `similar[]`, `search_text`. Per-song fields: `language`, `themes[]`, `mood[]`, `occasion[]`, `alt_titles{no,en}`, `key_phrases[]`, `search_text`. The `search_text` is a flat lowercase keyword blob that the index actually consumes — the other fields are there so a human (or future feature) can see the structured reasoning.
+
+Two implementations:
+
+- **`crawler/enrich.py`** — local Claude via `claude -p --model sonnet`. Quota-aware (reads `~/.claude/quota-data.json`). Wrapper `run-enrich.ps1` sleeps through 5-hour Max resets, resumable letter-by-letter.
+- **`crawler/enrich-gpt.py`** — OpenAI API variant, concurrent in-flight requests via ThreadPoolExecutor.
+
+Both write to per-letter files (`enrichment/<letter>.json`) under file locks so they can run in parallel against disjoint letter sets. The default split is Claude `a–m`, OpenAI `n–9`; `merge-enrichment.py` assembles the per-letter files into `enrichment.json` at the end.
+
+### Journey: what worked, what failed
+
+The repo's git log reads like a search-tuning diary. Notable stops:
+
+| Commit | Change | Why |
+|---|---|---|
+| (initial) | Inverted index + exact match + prefix expansion + Damerau-Levenshtein fuzzy + Norwegian diacritic folding | Baseline. Felt good on simple queries, terrible on quoted lyrics. |
+| `5716980` | Enrich quota-awareness | Claude-Max 5h resets stopped serial enrichment mid-letter. `run-enrich.ps1` reads quota-data.json and sleeps through resets. |
+| `b43ef05`, `be9ad42` | Add OpenAI variant via the `openai` SDK | Second LLM lets us run parallel + cross-check. |
+| `303c689` | Split prompt into stable prefix + per-entry suffix | Prompt caching cut input-token cost on long runs. |
+| `7c940a4`, `18d391a` | Refactor enrichment to per-letter files + locks | Required for safe parallel writes; also made partial enrichments resumable. |
+| `2ffe873` | Parallel enrichment: cross-check + reverse + merge | Run each LLM on the other's letters → diff. Surfaces hallucinations (one model claims certainty where the other admits ignorance) and genuinely ambiguous catalog entries. |
+| `40ec4cb` | Concurrent in-flight requests in `enrich-gpt.py` (ThreadPool) | Make OpenAI runs an order of magnitude faster than serial. |
+| `110fb3f` | Graceful Ctrl+C + content-filter handling | Long unattended runs need to interrupt cleanly. |
+| `90ebb69` | Body search: IDF weighting + exact-match only | **Big one.** Body prefix expansion was the worst noise source: chord-over-lyric text contains thousands of 2-3 char prefixes. Switched to exact-only on bodies, plus IDF weighting on all three indexes so `tjene`/`kroppen` dominate `jeg`/`vil`/`på`. |
+| `a6c9cc0` | Phrase mode + multi-tab dedup + Hjem-clears-search | Even with IDF, 4+ token queries dragged artists into the song frame via name index. Fix was structural: phrase queries skip name indexes entirely. Same commit: `MAX` body score per song, not `SUM`. |
+| `7e18b62` | Always show "Søk live på nortabs.net" at bottom of results | Users want the live-search second-opinion button even when local results exist, not only on zero-hit. |
+| `ce687e3` | Pseudo-artist tag search | Discovered that some "artists" are curated thematic buckets. Hand-picked synonym strings replace the LLM's thin output for those eight. |
+| `71f45f7` | Token aliases | `tronder` was missing songs tagged `trondheim`. A 4-line data table covers the common cases; LLM doesn't need to be exhaustive about every transliteration. |
+
+What was tried and ripped out:
+
+- **Prefix expansion on body tokens.** Killed in `90ebb69`. Body text contains every short prefix imaginable; prefix matching turned every body token into a noise generator.
+- **`SUM` body scores across a song's tabs.** Killed in `a6c9cc0`. Multi-upload-popular songs were drowning niche songs with stronger actual matches.
+- **"Mente du …?" on multi-token queries.** Single-token only now. Damerau-Levenshtein on `jeg vil tjeen pegnen` produces nonsense suggestions — better to show nothing than wrong.
+- **Showing the live-search button only on zero results.** Always visible now.
+- **Single-LLM enrichment.** Claude alone produced gaps; OpenAI alone produced different gaps. Cross-check + reverse runs are how the catalog reached usable coverage.
+
+### Open search questions
+
+- **Re-ranking the songs frame when both body match and song enrichment fire on the same song.** Current behavior sums; might want to clip or take a logarithm so a song that wins on both signals doesn't completely starve nearby contenders.
+- **Per-tab body weighting by tab-type.** The catalog distinguishes "chords", "tab", "bass", etc. A lyric phrase match probably means more when it's in a "chords" tab (always has lyrics) than in a "tab" tab (might be instrumental). Currently all tab types are treated equally.
+- **Multi-pass enrichment for `key_phrases` quality.** LLMs occasionally hallucinate phrases that don't appear in the body. A regex check + retry-with-stricter-prompt pass would tighten this.
+- **Search history / typeahead.** Not yet built. The folded-token sorted array (`_allTokens`) is half the data structure already; surfacing it as a suggestion list is small work.
 
 ## Roadmap
 
@@ -70,11 +159,7 @@ Tasks:
    - `#/tab/:id` — tab body.
 
 ### Phase 2 — Differentiating features
-1. **Search**: client-side, weighted, multi-source. Inputs: artist + song enriched `search_text` (from `enrichment.json`), tab `body` (via inverted index built at load), favorites/songbook membership (vekter skyhøyt). Layout: pinned search field at top; results stream into three hidden frames (artists / songs / lyrics) that reveal as matches appear. Includes:
-   - Diakritisk-folding for ISO-8859-1-challenged folk: `ø↔o↔oe`, `æ↔a↔ae`, `å↔a↔aa`. Exact (med diakritisk) scorer høyere enn single-char-fold som scorer høyere enn bigram-fold.
-   - Fuzzy match (Damerau-Levenshtein, edit-distance ≤ 2) for skrivefeil.
-   - "Mente du …" suggestions when top hit has edit-distance > 2.
-   - **Fall-through**: 0 hits → "Søk live på nortabs.net"-knapp åpner ny tab. Ingen embedding, ingen CORS.
+1. **Search**: see the [Search — current state and journey](#search--current-state-and-journey) section above. That's the star player; everything else is plumbing around it.
 2. **Favorites & Songbooks**: see dedicated section below.
 3. **Auto-scroll playback**: port the 5-second countdown + smooth scroll from `app.py`. `requestAnimationFrame`-driven.
 
