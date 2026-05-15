@@ -225,6 +225,15 @@ When the time comes, candidates for the backend: Supabase (free tier, Postgres +
   - Likely path: do (1) the moment Pages' gzip handling ever feels insufficient (~half a day of work). Graduate to (2) only when real heap-pressure measurements demand it. Skip (3) unless cold-start parse time becomes a real complaint.
   - Cross-cutting concern: cache-busting (`?v=${APP_VERSION}`) needs to apply to whichever asset(s) we ship, including the per-letter buckets in path (2).
 
+- **Visegrep-aware chord transposition** (planned, not yet built):
+  - nortabs.net offers per-semitone transposition. That's not what most casual players want — semitone shifts often land in keys like F♯ or C♯ where every other chord becomes a barre, and you've made the song *harder* to play. Tommy's principle, transcribed verbatim: *"Transponering bør IMNHO KUN gå til 'spillbare visegrep'"*.
+  - Right principle: transpose only to keys where the resulting chord set stays in the **visegrep-friendly** zone — keys where the majority of the song's chords have open-position shapes (C, D, E, G, A, Am, Em, Dm).
+  - Implementation sketch:
+    1. Score each candidate target key by the percentage of transposed chords that have an open / non-barre fingering in `chord-data.js`. Possibly flag each fingering entry with a `visegrep: true | false` field rather than inferring from `barre`.
+    2. Surface the top 2-3 transposition targets, not all 12 semitones. Buttons might read e.g. *"Transponer +2 (G-dur — \"alt åpent\")"* rather than *"+1 halvtone"*.
+    3. **Capo as preferred mechanism**: a capo at fret N lets the player keep open-shape fingerings while shifting pitch. For a song in E♭, *"Capo 1, spill som D-dur"* is friendlier than *"transponer ned ½ trinn og lær E♭-grep"*. Offer capo positions that yield visegrep-friendly shapes alongside (or instead of) plain transposition.
+  - Builds on the existing `chord-data.js` + `chord-diagrams.js`: the same fingering database that drives the foldout also tells us which keys are "playable" for a given song's chord set.
+
 - **Reorder tabs within a songbook**: musicians need to rearrange set lists. Implement up/down arrow buttons next to each tab in the songbook detail view. Don't bother with HTML5 native drag-and-drop — bad on touch, and the music-stand-on-phone use case is touch-first. Vanilla ↑/↓ buttons work everywhere, accessible, ~30 lines of code.
 
 - **Export to ChordPro / other formats**: musicians often want to import songs into ChordPro-aware apps (OnSong, SongBook+, ChordSheetJS-based readers, etc.). Three implementation tiers:
