@@ -154,6 +154,7 @@ li { margin: 0.25rem 0; }
 
 .tab-body {
   font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: calc(1rem * var(--tab-text-scale, 1));
   white-space: pre;
   overflow-x: auto;
   background: var(--card-bg);
@@ -161,6 +162,36 @@ li { margin: 0.25rem 0; }
   padding: 1rem;
   border-radius: 4px;
 }
+
+/* Discrete text-size overlay, right-edge centered. Always visible on a tab
+ * page; auto-removed by view swap since it lives inside #app. Sits clear of
+ * the playback HUD (bottom-center) and the search bar (top). */
+#text-size-ctl {
+  position: fixed;
+  right: 0.4rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  z-index: 15;
+}
+#text-size-ctl button {
+  width: 2.2rem;
+  height: 2.2rem;
+  padding: 0;
+  background: rgba(26, 26, 26, 0.55);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  cursor: pointer;
+}
+#text-size-ctl button:hover { background: rgba(26, 26, 26, 0.85); }
+#text-size-ctl button:disabled { opacity: 0.3; cursor: not-allowed; }
 
 .home-links {
   margin-top: 1.5rem;
@@ -369,11 +400,18 @@ button.heart:hover { background: rgba(221, 51, 51, 0.1); }
   .tab-header { flex-wrap: wrap; }
   .tab-header h1 { font-size: 1.1rem; line-height: 1.25; flex: 1 1 100%; }
   .tab-body {
-    font-size: 0.78rem;
+    font-size: calc(0.78rem * var(--tab-text-scale, 1));
     padding: 0.6rem;
     line-height: 1.45;
   }
   .chords { font-size: 0.85rem; }
+
+  /* Text-size overlay: smaller & tucked against the edge on phones. */
+  #text-size-ctl button {
+    width: 1.9rem;
+    height: 1.9rem;
+    font-size: 0.8rem;
+  }
 
   /* Picker + songbook-back stack vertically on phone */
   .picker-row { flex-direction: column; gap: 0.35rem; }

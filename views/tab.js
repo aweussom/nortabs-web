@@ -12,6 +12,11 @@ import {
   setPlaybackDuration,
   getPlaybackStartY,
   setPlaybackStartY,
+  getTextScale,
+  setTextScale,
+  TEXT_SCALE_MIN,
+  TEXT_SCALE_MAX,
+  TEXT_SCALE_STEP,
 } from '../storage.js';
 import { escapeHtml } from '../util.js';
 import * as playback from '../playback.js';
@@ -107,6 +112,10 @@ export function renderTabUI(root, refs, backLink, opts = {}) {
     </div>
     ${chords}
     <pre class="tab-body">${escapeHtml(tab.body || '')}</pre>
+    <div id="text-size-ctl" aria-label="Endre tekststørrelse">
+      <button data-action="larger" title="Større tekst">A+</button>
+      <button data-action="smaller" title="Mindre tekst">a−</button>
+    </div>
     <div id="playback-hud" data-phase="idle">
       <div class="hud-time" id="hud-time"></div>
       <div class="hud-controls" id="hud-controls"></div>
@@ -122,12 +131,13 @@ export function renderTabUI(root, refs, backLink, opts = {}) {
 
   wirePicker(root, tab.id);
   wirePlayback(root, tab.id);
-  wireChordWrap(root, tab.body || '');
+  const applyWrap = wireChordWrap(root, tab.body || '');
+  wireTextSize(root, applyWrap);
 }
 
 function wireChordWrap(root, rawBody) {
   const preEl = root.querySelector('.tab-body');
-  if (!preEl) return;
+  if (!preEl) return () => {};
   const apply = () => {
     if (!preEl.isConnected) return;
     const cols = measureMaxCols(preEl);
@@ -141,6 +151,35 @@ function wireChordWrap(root, rawBody) {
     timer = setTimeout(apply, 120);
   };
   window.addEventListener('resize', _resizeHandler, { passive: true });
+  return apply;
+}
+
+function wireTextSize(root, applyWrap) {
+  const ctl = root.querySelector('#text-size-ctl');
+  const preEl = root.querySelector('.tab-body');
+  if (!ctl || !preEl) return;
+
+  const minus = ctl.querySelector('[data-action="smaller"]');
+  const plus = ctl.querySelector('[data-action="larger"]');
+
+  const apply = () => {
+    const scale = getTextScale();
+    preEl.style.setProperty('--tab-text-scale', String(scale));
+    if (minus) minus.disabled = scale <= TEXT_SCALE_MIN + 1e-6;
+    if (plus) plus.disabled = scale >= TEXT_SCALE_MAX - 1e-6;
+    applyWrap();
+  };
+
+  ctl.addEventListener('click', (e) => {
+    const action = e.target.closest('button')?.dataset.action;
+    if (!action) return;
+    const cur = getTextScale();
+    const next = action === 'larger' ? cur + TEXT_SCALE_STEP : cur - TEXT_SCALE_STEP;
+    setTextScale(next);
+    apply();
+  });
+
+  apply();
 }
 
 function rerenderPicker(root, tabId) {

@@ -1,6 +1,30 @@
 const KEY = 'nortabs:songbooks:v1';
 const PB_KEY = 'nortabs:playback:v1';
 const PB_DEFAULT_DURATION_S = 180;
+const TS_KEY = 'nortabs:textscale:v1';
+
+export const TEXT_SCALE_MIN = 0.7;
+export const TEXT_SCALE_MAX = 2.0;
+export const TEXT_SCALE_STEP = 0.1;
+const TS_DEFAULT = 1.0;
+
+export function getTextScale() {
+  try {
+    const raw = localStorage.getItem(TS_KEY);
+    if (!raw) return TS_DEFAULT;
+    const n = parseFloat(raw);
+    if (!Number.isFinite(n)) return TS_DEFAULT;
+    return Math.max(TEXT_SCALE_MIN, Math.min(TEXT_SCALE_MAX, n));
+  } catch {
+    return TS_DEFAULT;
+  }
+}
+
+export function setTextScale(s) {
+  const clamped = Math.max(TEXT_SCALE_MIN, Math.min(TEXT_SCALE_MAX, s));
+  try { localStorage.setItem(TS_KEY, String(clamped)); } catch {}
+  return clamped;
+}
 
 function readPB() {
   try {

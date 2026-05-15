@@ -27,6 +27,39 @@ const PSEUDO_ARTIST_TAGS = {
   615: 'folkevise folkeviser folkesang folkemusikk folkemelodi tradisjonell slatt',        // Folkeviser
 };
 
+// Token alias groups: if ANY member of a group is indexed for an artist or
+// song, ALL members get indexed for that same entity. The user's mental
+// model: "Trondheim / Trondhjem / Trønder are the same place — finding one
+// should find all." Members must be written in folded form (ø→o, æ→a, å→a).
+// Append to the list as gaps surface — single edit, no other plumbing.
+const TOKEN_ALIASES = [
+  ['trondheim', 'trondhjem', 'tronder', 'tronderrock', 'trondelag', 'nidaros'],
+  ['oslo', 'kristiania', 'christiania'],
+  ['bergen', 'bergensk', 'bergenser'],
+  ['stavanger', 'siddis'],
+];
+
+const _aliasLookup = (() => {
+  const m = new Map();
+  for (const group of TOKEN_ALIASES) {
+    for (const member of group) {
+      const others = group.filter(x => x !== member);
+      const existing = m.get(member) ?? [];
+      m.set(member, [...new Set([...existing, ...others])]);
+    }
+  }
+  return m;
+})();
+
+function expandWithAliases(tokens) {
+  const out = new Set(tokens);
+  for (const t of tokens) {
+    const siblings = _aliasLookup.get(t);
+    if (siblings) for (const s of siblings) out.add(s);
+  }
+  return out;
+}
+
 let _artistIndex = new Map(); // token → Set<artistId>
 let _songIndex = new Map();   // token → Set<songId>
 let _bodyIndex = new Map();   // token → Set<tabId>
@@ -74,7 +107,7 @@ export function buildIndex(catalog, enrichment) {
       const baseEnrich = enrichment?.artists?.[artist.id]?.search_text ?? '';
       const tagText = PSEUDO_ARTIST_TAGS[artist.id] ?? '';
       const aEnrich = tagText ? `${baseEnrich} ${tagText}` : baseEnrich;
-      const aTokens = tokenize(fold(`${artist.name} ${aEnrich}`));
+      const aTokens = expandWithAliases(tokenize(fold(`${artist.name} ${aEnrich}`)));
       for (const t of aTokens) {
         addToIndex(_artistIndex, t, artist.id);
         allTokenSet.add(t);
@@ -83,7 +116,7 @@ export function buildIndex(catalog, enrichment) {
 
       for (const song of artist.songs) {
         const sEnrich = enrichment?.songs?.[song.id]?.search_text ?? '';
-        const sTokens = tokenize(fold(`${artist.name} ${aEnrich} ${song.name} ${sEnrich}`));
+        const sTokens = expandWithAliases(tokenize(fold(`${artist.name} ${aEnrich} ${song.name} ${sEnrich}`)));
         for (const t of sTokens) {
           addToIndex(_songIndex, t, song.id);
           allTokenSet.add(t);
