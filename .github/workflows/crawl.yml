@@ -117,4 +117,24 @@ jobs:
           PYEOF
           )
           git commit -m "Crawl (${MODE}): ${summary}"
-          git push
+
+          # Remote can advance during the crawl (manual pushes, doc edits, etc).
+          # The crawler only touches catalog.json + version.js, so rebasing on
+          # top of unrelated commits is always clean. Retry on the race window
+          # between fetch and push.
+          for attempt in 1 2 3; do
+            git fetch origin main
+            if ! git rebase origin/main; then
+              echo "rebase conflict on attempt ${attempt} — aborting"
+              git rebase --abort || true
+              exit 1
+            fi
+            if git push; then
+              echo "pushed on attempt ${attempt}"
+              exit 0
+            fi
+            echo "push attempt ${attempt} failed; retrying in $((attempt * 5))s"
+            sleep $((attempt * 5))
+          done
+          echo "all push attempts failed"
+          exit 1

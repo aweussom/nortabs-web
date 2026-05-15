@@ -62,21 +62,37 @@ function Write-RunLog {
 
 Write-RunLog "=== scheduled enrich run starting ==="
 
-# --- Step 1: refuse if working tree dirty ---
-$status = git status --porcelain
-if ($status) {
-  Write-RunLog "ABORT: working tree is dirty:"
-  $status -split "`r?`n" | ForEach-Object { if ($_) { Write-RunLog "  $_" } }
+# --- Step 1: refuse only if OUR files are dirty ---
+# Only the enrichment outputs would be silently clobbered by this run.
+# Unrelated dirty files (README.md edits, in-progress search.js tweaks,
+# etc.) are fine to ignore — git pull --ff-only won't touch them unless
+# the incoming commits also modify them, and our git add is path-scoped.
+$enrichStatus = git status --porcelain -- enrichment.json enrichment/ enrichment-gpt.json
+if ($enrichStatus) {
+  Write-RunLog "ABORT: enrichment files are dirty:"
+  $enrichStatus -split "`r?`n" | ForEach-Object { if ($_) { Write-RunLog "  $_" } }
   Write-RunLog "Resolve manually (commit, stash, or revert), then re-run."
   exit 1
 }
 
-# --- Step 2: fast-forward pull ---
-Write-RunLog "git fetch + pull --ff-only"
+# Note unrelated dirty state for the log, but proceed.
+$allStatus = git status --porcelain
+if ($allStatus) {
+  Write-RunLog "note: working tree has unrelated changes (ignored):"
+  $allStatus -split "`r?`n" | ForEach-Object { if ($_) { Write-RunLog "  $_" } }
+}
+
+# --- Step 2: rebase pull (autostash unrelated dirty files) ---
+# --rebase: handles the case where a previous run's push failed and we
+#   have an enrichment commit still ahead of origin.
+# --autostash: temporarily stashes uncommitted unrelated changes (e.g.,
+#   Tommy's in-progress README.md edits) and re-applies them after.
+Write-RunLog "git fetch + pull --rebase --autostash"
 git fetch origin 2>&1 | ForEach-Object { Write-RunLog "  $_" }
-git pull --ff-only 2>&1 | ForEach-Object { Write-RunLog "  $_" }
+git pull --rebase --autostash 2>&1 | ForEach-Object { Write-RunLog "  $_" }
 if ($LASTEXITCODE -ne 0) {
-  Write-RunLog "ABORT: pull failed (rc=$LASTEXITCODE). Local and remote may have diverged."
+  Write-RunLog "ABORT: pull --rebase failed (rc=$LASTEXITCODE). Aborting any in-progress rebase."
+  git rebase --abort 2>$null
   exit 1
 }
 
@@ -114,12 +130,25 @@ if ($LASTEXITCODE -ne 0) {
   exit 1
 }
 
-git push 2>&1 | ForEach-Object {
-  if ($_) { Write-RunLog "  $_" }
+# Remote may have advanced during the (often hours-long) enrichment run.
+# Rebase our enrichment commit on top, retry on race.
+for ($attempt = 1; $attempt -le 3; $attempt++) {
+  git fetch origin 2>&1 | ForEach-Object { if ($_) { Write-RunLog "  $_" } }
+  git rebase origin/main --autostash 2>&1 | ForEach-Object { if ($_) { Write-RunLog "  $_" } }
+  if ($LASTEXITCODE -ne 0) {
+    Write-RunLog "rebase failed on attempt ${attempt} — aborting rebase"
+    git rebase --abort 2>$null
+    exit 1
+  }
+  git push 2>&1 | ForEach-Object { if ($_) { Write-RunLog "  $_" } }
+  if ($LASTEXITCODE -eq 0) {
+    Write-RunLog "pushed on attempt ${attempt}"
+    Write-RunLog "=== done ==="
+    exit 0
+  }
+  $sleepSec = $attempt * 5
+  Write-RunLog "push attempt ${attempt} failed; retrying in ${sleepSec}s"
+  Start-Sleep -Seconds $sleepSec
 }
-if ($LASTEXITCODE -ne 0) {
-  Write-RunLog "push failed (rc=$LASTEXITCODE) — local commit kept, will retry next run"
-  exit 1
-}
-
-Write-RunLog "=== done ==="
+Write-RunLog "all push attempts failed — local commit kept, will retry next run"
+exit 1
