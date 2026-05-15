@@ -18,7 +18,7 @@ import {
   TEXT_SCALE_MAX,
   TEXT_SCALE_STEP,
 } from '../storage.js';
-import { escapeHtml } from '../util.js';
+import { escapeHtml, cleanTabBody } from '../util.js';
 import * as playback from '../playback.js';
 import { wrapTabBody, measureMaxCols } from '../chord-wrap.js';
 
@@ -98,6 +98,7 @@ export function renderTabUI(root, refs, backLink, opts = {}) {
   const chords = Array.isArray(tab.chordnames) && tab.chordnames.length
     ? `<p class="chords">Chords: ${escapeHtml(tab.chordnames.join(' '))}</p>`
     : '';
+  const cleanedBody = cleanTabBody(tab.body || '');
 
   root.innerHTML = `
     <p><a href="${escapeHtml(backLink.href)}">&larr; ${escapeHtml(backLink.label)}</a></p>
@@ -111,7 +112,7 @@ export function renderTabUI(root, refs, backLink, opts = {}) {
       ${renderSongbookBack(opts.songbookId)}
     </div>
     ${chords}
-    <div class="tab-bleed"><pre class="tab-body">${escapeHtml(tab.body || '')}</pre></div>
+    <div class="tab-bleed"><pre class="tab-body">${escapeHtml(cleanedBody)}</pre></div>
     <div id="text-size-ctl" aria-label="Endre tekststørrelse">
       <button data-action="larger" title="Større tekst">A+</button>
       <button data-action="smaller" title="Mindre tekst">a−</button>
@@ -131,7 +132,7 @@ export function renderTabUI(root, refs, backLink, opts = {}) {
 
   wirePicker(root, tab.id);
   wirePlayback(root, tab.id);
-  const applyWrap = wireChordWrap(root, tab.body || '');
+  const applyWrap = wireChordWrap(root, cleanedBody);
   wireTextSize(root, applyWrap);
 }
 
