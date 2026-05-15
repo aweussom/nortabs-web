@@ -5,6 +5,9 @@
   --muted: #777;
   --border: #e0e0e0;
   --card-bg: #fff;
+  /* The GUI's content lane: search bar, search results, headers, lists. Tab
+   * bodies escape this on wide viewports (see .tab-body media query). */
+  --content-max: 720px;
 }
 
 * { box-sizing: border-box; }
@@ -29,7 +32,7 @@ body {
   display: flex;
   gap: 0.5rem;
   align-items: center;
-  max-width: 720px;
+  max-width: var(--content-max);
   margin: 0 auto;
 }
 #home-link {
@@ -71,7 +74,7 @@ body {
   outline-offset: -1px;
 }
 #search-results {
-  max-width: 720px;
+  max-width: var(--content-max);
   margin: 0.5rem auto 0;
   max-height: 60vh;
   overflow-y: auto;
@@ -113,7 +116,7 @@ body {
 #search-results .fallthrough-link a:hover { color: var(--link); }
 
 #app {
-  max-width: 720px;
+  max-width: var(--content-max);
   margin: 0 auto;
   padding: 1rem;
 }
@@ -161,6 +164,24 @@ li { margin: 0.25rem 0; }
   border: 1px solid var(--border);
   padding: 1rem;
   border-radius: 4px;
+}
+
+/* On wide viewports, break the tab body out of #app's content lane so chord
+ * and lyric lines have room to breathe. The rest of the GUI (search bar,
+ * headers, lists) stays in the var(--content-max) lane on purpose — only
+ * the monospace tab body benefits from extra width. Capped at 1400px so
+ * lines don't get hostile on ultra-wide displays.
+ *
+ * The full-bleed math: the parent #app is centered with max-width
+ * var(--content-max), so its left edge sits at (100vw - --content-max) / 2.
+ * To pull our left edge to (100vw - --tab-max) / 2 (centered on viewport
+ * for the wider tab body), the negative margin is (--content-max - --tab-max) / 2. */
+@media (min-width: 800px) {
+  .tab-body {
+    --tab-max: min(calc(100vw - 2rem), 1400px);
+    width: var(--tab-max);
+    margin-left: calc((var(--content-max) - var(--tab-max)) / 2);
+  }
 }
 
 /* Discrete text-size overlay, right-edge centered. Always visible on a tab
