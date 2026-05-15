@@ -155,6 +155,85 @@ li { margin: 0.25rem 0; }
   color: var(--muted);
 }
 
+/* Foldout that shows chord fingering diagrams below the chord-name list.
+ * Collapsed by default — the chord-name line keeps the prior compact look. */
+.chords-foldout {
+  margin: 0.5rem 0;
+}
+.chords-foldout summary {
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  padding: 0.1rem 0;
+}
+.chords-foldout summary::-webkit-details-marker { display: none; }
+.chords-foldout summary::before {
+  content: '▶';
+  color: var(--muted);
+  font-size: 0.65em;
+  transition: transform 0.12s ease;
+  display: inline-block;
+}
+.chords-foldout[open] summary::before { transform: rotate(90deg); }
+
+.chord-diagrams {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem 1rem;
+  margin: 0.75rem 0 0.25rem;
+  padding: 0.5rem 0;
+}
+.chord-diagram {
+  width: 64px;
+  height: 80px;
+  flex: 0 0 auto;
+}
+.chord-diagram__label {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-weight: 600;
+  font-size: 11px;
+  fill: var(--fg);
+}
+.chord-diagram__fret-label {
+  font-family: ui-monospace, monospace;
+  font-size: 7.5px;
+  fill: var(--muted);
+}
+.chord-diagram__string,
+.chord-diagram__fret {
+  stroke: var(--border);
+  stroke-width: 0.6;
+}
+.chord-diagram__nut {
+  stroke: var(--fg);
+  stroke-width: 2;
+}
+.chord-diagram__open {
+  fill: none;
+  stroke: var(--fg);
+  stroke-width: 0.8;
+}
+.chord-diagram__mute {
+  font-family: ui-sans-serif, sans-serif;
+  font-size: 10px;
+  fill: var(--fg);
+}
+.chord-diagram__dot,
+.chord-diagram__barre {
+  fill: var(--fg);
+}
+.chord-diagram-fallback {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  color: var(--muted);
+  font-size: 0.85rem;
+  align-self: center;
+  padding: 0.3rem 0.45rem;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+}
+
 .tab-body {
   font-family: ui-monospace, Menlo, Consolas, monospace;
   font-size: calc(1rem * var(--tab-text-scale, 1));

@@ -21,6 +21,8 @@ import {
 import { escapeHtml, cleanTabBody } from '../util.js';
 import * as playback from '../playback.js';
 import { wrapTabBody, measureMaxCols } from '../chord-wrap.js';
+import { renderChordSvg } from '../chord-diagrams.js';
+import { getChordFingering } from '../chord-data.js';
 
 let _keyHandler = null;
 let _scrollListener = null;
@@ -95,8 +97,12 @@ export function render(state, root) {
  */
 export function renderTabUI(root, refs, backLink, opts = {}) {
   const { tab, song, artist } = refs;
-  const chords = Array.isArray(tab.chordnames) && tab.chordnames.length
-    ? `<p class="chords">Chords: ${escapeHtml(tab.chordnames.join(' '))}</p>`
+  const chordnames = Array.isArray(tab.chordnames) ? tab.chordnames : [];
+  const chords = chordnames.length
+    ? `<details class="chords-foldout">
+         <summary><span class="chords">Chords: ${escapeHtml(chordnames.join(' '))}</span></summary>
+         <div class="chord-diagrams" aria-label="Akkorddiagrammer"></div>
+       </details>`
     : '';
   const cleanedBody = cleanTabBody(tab.body || '');
 
@@ -132,8 +138,30 @@ export function renderTabUI(root, refs, backLink, opts = {}) {
 
   wirePicker(root, tab.id);
   wirePlayback(root, tab.id);
+  wireChordDiagrams(root, chordnames);
   const applyWrap = wireChordWrap(root, cleanedBody);
   wireTextSize(root, applyWrap);
+}
+
+/**
+ * Populate the chord-foldout body with SVG diagrams for every chord we have
+ * fingering data for. Chords we don't know fall back to plain text, so the
+ * user can still see what's used even if we can't draw it.
+ */
+function wireChordDiagrams(root, chordnames) {
+  const container = root.querySelector('.chord-diagrams');
+  if (!container || chordnames.length === 0) return;
+  for (const name of chordnames) {
+    const fingering = getChordFingering(name);
+    if (fingering) {
+      container.appendChild(renderChordSvg(name, fingering));
+    } else {
+      const fallback = document.createElement('span');
+      fallback.className = 'chord-diagram-fallback';
+      fallback.textContent = name;
+      container.appendChild(fallback);
+    }
+  }
 }
 
 function wireChordWrap(root, rawBody) {
