@@ -126,6 +126,13 @@ When the time comes, candidates for the backend: Supabase (free tier, Postgres +
 
 ## Backlog / TODO
 
+- **Tolerant JSON parser for LLM output in enrich.py**: Sonnet 4.6 occasionally produces JSON-ish text with unquoted keys, single quotes, or trailing commas. Current `extract_json()` uses strict `json.loads` → such entries fail and get retried on the next run. Failure rate is small (1 in ~240 during letter A's first pass) but non-zero. Three implementation options when failure rate gets annoying:
+  1. **`json5` (PyPI)** — handles JS-style relaxed JSON cleanly. Adds a dep, but only on the local enrichment machine — not on the GitHub Actions crawler or the shipped web app. Pip install + a one-line import swap.
+  2. **Hand-rolled `_repair_json()`** — regex passes for: quote unquoted keys, replace single quotes with double quotes (carefully — strings might contain apostrophes), strip trailing commas. Zero-dep but brittle.
+  3. **Stricter prompt** — add "USE DOUBLE QUOTES ON ALL KEYS AND VALUES; NO TRAILING COMMAS; NO COMMENTS" to ARTIST_PROMPT and SONG_PROMPT. Doesn't fix existing failures but reduces future rate.
+  
+  Recommendation: do (3) as a free first pass; if failures persist, add (1) — `json5` is well-maintained, < 1 KB on import, and the dep cost is acceptable for a local-only tool. (2) only if we want truly zero-dep at the cost of robustness.
+
 - **Reorder tabs within a songbook**: musicians need to rearrange set lists. Implement up/down arrow buttons next to each tab in the songbook detail view. Don't bother with HTML5 native drag-and-drop — bad on touch, and the music-stand-on-phone use case is touch-first. Vanilla ↑/↓ buttons work everywhere, accessible, ~30 lines of code.
 
 - **Export to ChordPro / other formats**: musicians often want to import songs into ChordPro-aware apps (OnSong, SongBook+, ChordSheetJS-based readers, etc.). Three implementation tiers:

@@ -9,6 +9,24 @@
  *   plus NFD diacritic stripping (è é ê → e, etc.)
  */
 
+// Pseudo-artists on nortabs.net are curated thematic buckets, not real
+// artists ("Julesanger", "Salmer", "Lovsanger", …). Their children inherit
+// these synonym tokens through the existing artist-enrichment path, so a
+// search for `jul`, `barnesang`, `kristen` etc. surfaces the bucket plus
+// all its songs without depending on the LLM-generated enrichment.
+// Cutoff: ≥7 songs per bucket. Synonyms are kept tight — each one should
+// be a term a user would plausibly type when looking for that theme.
+const PSEUDO_ARTIST_TAGS = {
+  388: 'lovsang lovsanger kristen gospel worship kirkemusikk menighet tilbedelse',         // Lovsanger
+  173: 'jul julesang julesanger juletre julaften advent julenisse julmusikk',              // Julesanger
+  270: 'barn barnesang barnesanger barnehage barnerim regle vuggesang sovevise',           // Barnesanger
+  161: 'fotball fotballsang fotballsanger supporter tribune landslag supportersang',       // Fotballsanger
+  426: 'salme salmer salmebok kirke kristen gudstjeneste begravelse hymne',                // Salmer
+  309: '17 mai nasjonaldag grunnlovsdag norge norsk fedreland patriotisk',                 // 17. mai-sanger
+  283: 'sorland sorlandet sorlandsvise sorlandsviser kyst kystkultur agder kristiansand',  // Sorlandsviser
+  615: 'folkevise folkeviser folkesang folkemusikk folkemelodi tradisjonell slatt',        // Folkeviser
+};
+
 let _artistIndex = new Map(); // token → Set<artistId>
 let _songIndex = new Map();   // token → Set<songId>
 let _bodyIndex = new Map();   // token → Set<tabId>
@@ -53,7 +71,9 @@ export function buildIndex(catalog, enrichment) {
 
   for (const [letter, bucket] of Object.entries(catalog?.letters ?? {})) {
     for (const artist of bucket.artists) {
-      const aEnrich = enrichment?.artists?.[artist.id]?.search_text ?? '';
+      const baseEnrich = enrichment?.artists?.[artist.id]?.search_text ?? '';
+      const tagText = PSEUDO_ARTIST_TAGS[artist.id] ?? '';
+      const aEnrich = tagText ? `${baseEnrich} ${tagText}` : baseEnrich;
       const aTokens = tokenize(fold(`${artist.name} ${aEnrich}`));
       for (const t of aTokens) {
         addToIndex(_artistIndex, t, artist.id);
