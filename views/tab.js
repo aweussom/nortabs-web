@@ -111,7 +111,7 @@ export function renderTabUI(root, refs, backLink, opts = {}) {
       ${renderSongbookBack(opts.songbookId)}
     </div>
     ${chords}
-    <pre class="tab-body">${escapeHtml(tab.body || '')}</pre>
+    <div class="tab-bleed"><pre class="tab-body">${escapeHtml(tab.body || '')}</pre></div>
     <div id="text-size-ctl" aria-label="Endre tekststørrelse">
       <button data-action="larger" title="Større tekst">A+</button>
       <button data-action="smaller" title="Mindre tekst">a−</button>

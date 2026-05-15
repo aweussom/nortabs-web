@@ -166,21 +166,42 @@ li { margin: 0.25rem 0; }
   border-radius: 4px;
 }
 
-/* On wide viewports, break the tab body out of #app's content lane so chord
- * and lyric lines have room to breathe. The rest of the GUI (search bar,
- * headers, lists) stays in the var(--content-max) lane on purpose — only
- * the monospace tab body benefits from extra width. Capped at 1400px so
- * lines don't get hostile on ultra-wide displays.
+/* `.tab-bleed` is a thin wrapper around `.tab-body` whose job on wide viewports
+ * is to escape #app's `--content-max` lane and provide a centered, viewport-wide
+ * playground inside which `.tab-body` shrinks to fit its (post-wrap) content.
  *
- * The full-bleed math: the parent #app is centered with max-width
- * var(--content-max), so its left edge sits at (100vw - --content-max) / 2.
- * To pull our left edge to (100vw - --tab-max) / 2 (centered on viewport
- * for the wider tab body), the negative margin is (--content-max - --tab-max) / 2. */
+ * Why a wrapper at all: we want the FRAME (the bordered pre) to be exactly as
+ * wide as the longest line of the wrapped text — not always the full lane. The
+ * bleed lane gives chord-wrap.js the budget to consider for wrapping; once it's
+ * wrapped, `.tab-body { width: max-content }` collapses the frame to the real
+ * widest line. Flex-centering on `.tab-bleed` puts that frame in the middle.
+ *
+ * Bleed math: parent (#app) is centered at `--content-max`, so its left edge
+ * sits at `(100vw - --content-max) / 2`. To pull the bleed's left edge to
+ * `(100vw - --bleed-max) / 2`, the offset from parent's left is
+ * `(--content-max - --bleed-max) / 2` — that's the negative margin-left below. */
+.tab-bleed {
+  display: flex;
+  justify-content: center;
+}
+
 @media (min-width: 800px) {
+  .tab-bleed {
+    --bleed-max: min(calc(100vw - 2rem), 1400px);
+    width: var(--bleed-max);
+    margin-left: calc((var(--content-max) - var(--bleed-max)) / 2);
+  }
   .tab-body {
-    --tab-max: min(calc(100vw - 2rem), 1400px);
-    width: var(--tab-max);
-    margin-left: calc((var(--content-max) - var(--tab-max)) / 2);
+    /* content-box: `width: max-content` sizes the CONTENT area to the longest
+     * line so padding adds on top instead of squeezing content out. With the
+     * project-default border-box, max-content would cap the OUTER width and
+     * the inner text would overflow by 2 * padding. */
+    box-sizing: content-box;
+    width: max-content;
+    /* In content-box, max-width applies to the content area too. Limit
+     * content to the bleed lane minus our padding (1rem each side) and
+     * border (1px each side) so the outer frame never exceeds `--bleed-max`. */
+    max-width: calc(100% - 2rem - 2px);
   }
 }
 
