@@ -191,7 +191,7 @@ Automation:
 Dependencies:
 
 - Crawler: stdlib only.
-- `enrich.py`: needs the `claude` CLI on `PATH`.
+- `enrich.py`: needs the `claude` CLI on `PATH` and `pip install json5` (lenient parser for occasional LLM-output glitches).
 - `enrich-gpt.py`: `pip install openai`.
 - `generate-wordcloud.py`: `pip install wordcloud pillow numpy`.
 

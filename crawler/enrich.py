@@ -91,7 +91,49 @@ Rules:
 - No markdown fences. No commentary. Just the JSON object.
 """
 
-_JSON_OBJ_RE = re.compile(r"\{[\s\S]*\}")
+# Optional lenient JSON parser. Local-enrichment-only dependency; not used
+# by the shipped web app or the GitHub Action crawler.
+try:
+    import json5 as _json5
+except ImportError:
+    _json5 = None
+
+
+def _first_balanced_json_block(text):
+    """Return the substring of `text` from the first balanced top-level
+    `{...}` block, or None if no balanced block exists.
+
+    String-aware: braces inside double-quoted JSON strings (with backslash
+    escapes) don't shift the brace count. This is what stops "Extra data"
+    errors when an LLM emits a clean object followed by trailing prose
+    that happens to contain stray braces.
+    """
+    depth = 0
+    start = -1
+    in_str = False
+    escape = False
+    for i, ch in enumerate(text):
+        if escape:
+            escape = False
+            continue
+        if in_str:
+            if ch == '\\':
+                escape = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+            continue
+        if ch == '{':
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == '}' and depth > 0:
+            depth -= 1
+            if depth == 0 and start != -1:
+                return text[start:i + 1]
+    return None
 
 
 def reconfigure_streams():
@@ -113,7 +155,19 @@ def call_llm(cli_cmd, prompt, timeout=120):
 
 
 def extract_json(text):
-    """Best-effort JSON extraction: strip fences, find first {...} block."""
+    """Best-effort JSON extraction tolerant of LLM glitches.
+
+    Strategy:
+      1. Strip code fences if present.
+      2. Try strict `json.loads` on the full text (happy path — covers
+         the case where the LLM followed instructions perfectly).
+      3. Fall back to a string-aware balanced `{...}` finder so trailing
+         commentary or a second emitted object doesn't poison the parse
+         ("Extra data" errors).
+      4. Parse the extracted block with strict json first; if that still
+         fails, retry with `json5` if installed (handles unquoted keys,
+         single quotes, trailing commas, comments).
+    """
     text = (text or "").strip()
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text)
@@ -122,10 +176,18 @@ def extract_json(text):
         return json.loads(text)
     except json.JSONDecodeError:
         pass
-    m = _JSON_OBJ_RE.search(text)
-    if not m:
+    block = _first_balanced_json_block(text)
+    if block is None:
         raise ValueError(f"No JSON object in LLM output: {text[:200]}")
-    return json.loads(m.group(0))
+    try:
+        return json.loads(block)
+    except json.JSONDecodeError as strict_err:
+        if _json5 is None:
+            raise ValueError(
+                f"Strict JSON parse failed and json5 is not installed "
+                f"(`pip install json5`). Block: {block[:200]} — {strict_err}"
+            )
+        return _json5.loads(block)
 
 
 def load_enrichment(path):
