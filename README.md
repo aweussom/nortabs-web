@@ -24,6 +24,36 @@ A small third thing: I had built a [Flet desktop app](../nortabs-app) for the sa
 
 ---
 
+## A walk through it
+
+The app is browsing-first: letter → artist → song → tab. Search runs in the same view, on top.
+
+**Home — the entry point.** A-Z + Æ Ø Å + 0-9. Sticky search bar above. A wordcloud built from the enriched metadata sits behind (faintly visible in the lower right — "childhood" peeks out).
+
+![Home — letter grid and sticky search bar](docs/screenshots/01-home.png)
+
+**Letter index.** Every artist whose name starts with the chosen letter. Pulled from the in-memory catalog — instantaneous even on letters with 150+ artists.
+
+![Letter C — list of artists](docs/screenshots/02-letter-c.png)
+
+**Artist page.** Songs are listed with their tab count in parentheses. "Bare Du (2)" means two different uploaders have transcribed it; "Blodsbrødre (1)" means one.
+
+![CC Cowboys — songs and tab counts](docs/screenshots/03-artist-cc-cowboys.png)
+
+**Song page.** Each upload, with credit. Some songs have one tab; popular ones have several to compare.
+
+![Bare Du — tabs by PedAndersen and Tom73](docs/screenshots/04-song-bare-du.png)
+
+**Tab view.** Chord-over-lyric body in monospace. The frame sizes itself to the actual content width — narrow songs sit centred, wide ones spread out up to ~1400 px. Heart toggles Favoritter. ▶ Auto-scroll launches the 5-second countdown + smooth scroll (HUD bottom-centre tracks remaining time, 3 min by default). The `A+` / `a−` overlay on the right edge adjusts text size persistently per tab.
+
+![Bare Du — tab view, chord-over-lyric body with auto-scroll HUD](docs/screenshots/06-tab-bare-du.png)
+
+**Songbooks.** Named, ordered collections of tabs. "Favoritter" is the default; you can create more (e.g. "Fjelltur påsken 2026"). Sharing is by URL — the URL *is* the share; recipient opens it and the songbook hydrates from the hash, with an option to save locally.
+
+![Sangbøker — Favoritter + Fjelltur påsken 2026](docs/screenshots/05-songbooks.png)
+
+---
+
 ## Search — the star player
 
 You can search by:
