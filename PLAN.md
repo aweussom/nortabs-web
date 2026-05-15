@@ -20,7 +20,7 @@ The owner of nortabs.no has shipped his own ad-supported app. Tommy has his expl
 | Data delivery | **Embed full catalog as one `catalog.json`** | Per-letter buckets: `{ crawled_at, letters: { a: {artists: [...]}, ... } }`. Whole site ~9 MB gzipped at current crawl (see below). One download → site is offline-capable, instant. |
 | Favorites | `localStorage` | Simple, ~5 MB headroom is plenty. |
 | Songbooks | Named groups of favorites, **shareable via URL hash** (`#/songbook?ids=12,847,3320`) | No backend needed for sharing — it's the killer feature versus nortabs.no. |
-| Crawler | Scheduled GitHub Action (nightly), Python stdlib only | Polite to the API (~28000 reqs at 200 ms delay = ~3 h). Commits updated `catalog.json` back to the repo. Per-letter checkpoints in `crawler/data/<letter>.json` make crawls resumable. |
+| Crawler | Scheduled GitHub Action — **incremental Mon-Sat + full Sun**, Python stdlib only | Daily incremental diffs `/collections/browse` (which carries `tab_count` + `song_count` per artist) against the existing catalog and only fetches changed artists/songs/tabs. Typical no-change night: ~80 reqs / ~1 min. Sunday full crawl: ~15 600 reqs at 200 ms ≈ 52 min, catches tab-body edits and same-count tab swaps that incremental can't see. Per-letter checkpoints in `crawler/data/<letter>.json` make crawls resumable. Commits updated `catalog.json` back to the repo. |
 | API access pattern | Crawler only. **The shipped web app never hits nortabs.net for data.** Search fall-through is the only browser→nortabs touchpoint, and it just opens nortabs.net in a new tab (no embedding, no CORS). | Reduces load on the owner's API; site stays fast and offline-capable. |
 | Search fall-through | When local search returns 0 hits, show a "Søk live på nortabs.net" link that opens `https://nortabs.net/?q=...` in a new tab. No embedding, no proxy. | Honest UX; preserves offline-first; zero CORS/infra cost. |
 | LLM enrichment | Sidecar `enrichment.json` produced by a **local cron job on Tommy's machine**, not in GitHub Actions. Invokes a local LLM CLI (copilot-cli with free Haiku, or claude-code with Sonnet 4.6). Pushes only the sidecar back to the repo. | Keeps API keys out of CI; cron uses existing local subscriptions. Crawler stays simple and free. |
@@ -98,8 +98,8 @@ Concept: a **songbook** is a named, ordered collection of tabs. "Favorites" is j
 - Future (Phase 4+ maybe): if we later add a backend for discovery/listing other people's public songbooks, the URL-hash share continues to work for private collections.
 
 ### Phase 3 — Full crawler + automation
-1. `crawler/crawl.py` — Python script that mirrors `nortabs-app/api.py` endpoints to produce `catalog.json`. Politeness delay configurable (default 100 ms). Outputs deterministic JSON (sorted keys) so git diffs are minimal.
-2. `.github/workflows/crawl.yml` — scheduled nightly, plus `workflow_dispatch` for manual rebuilds. Commits `catalog.json` only if changed.
+1. `crawler/crawl.py` — Python script that mirrors `nortabs-app/api.py` endpoints to produce `catalog.json`. Politeness delay configurable (default 100 ms). Outputs deterministic JSON (sorted keys) so git diffs are minimal. Supports `--incremental`, which loads the existing `catalog.json`, seeds per-letter checkpoints from it (so a partial run still merges into a complete catalog), then diffs `/collections/browse` against the previous state and only fetches changed artists/songs/tabs. Empties existing tab metadata is reused for unchanged tab IDs — only new tab IDs trigger a `/tabs/tab` body fetch.
+2. `.github/workflows/crawl.yml` — two cron triggers in one workflow: **Mon-Sat 03:00 UTC** runs `--incremental` (typical ~1 min); **Sun 03:00 UTC** runs a full crawl (~52 min) to catch tab-body edits and same-count tab swaps that incremental can't detect. Plus `workflow_dispatch` with a `mode` choice for manual rebuilds. Single `concurrency: catalog-crawl` group prevents overlap. Bumps `version.js` (cache-bust epoch) in the same commit when `catalog.json` changes. Requires the repo's "Workflow permissions" to be set to "Read and write" so `GITHUB_TOKEN` can push.
 3. `.github/workflows/pages.yml` — deploy to GitHub Pages on push to `main`.
 
 ### Phase 5+ — Long-term vision (no concrete plans yet)
@@ -218,6 +218,7 @@ User position **always** overrides the suggested jump: if user has scrolled befo
 - `/tabs/tab?id={id}` returns the chord/lyric text in **`body`**, not `content`. The Python app's `api.py:326` `data.get("content")` is wrong. Crawler uses `body`. ✓
 - `tab.chordnames` is a **JSON array of strings** (e.g. `["Am","Bb","C"]`), not a space-separated string. Crawler stores it as-is; views must join for display. ✓
 - `/collections/browse?sw={letter}` paginates with **`&limit={N}` (cap 50) and `&page={N}` (0-indexed)**. Without pagination params, it returns 10 results — easy to mistake for "this letter has 10 artists". Loop until response is empty. ✓
+- Both `/collections/browse` and `/collections/collection?id=X` carry **cheap change-detection signals**: browse entries include `tab_count` + `song_count` per artist; collection entries include `tab_count` per song. The incremental crawler diffs these against the existing catalog and skips deeper fetches when counts match. Caveat: a tab being replaced (one removed + one added on the same song, same total count) is invisible to this diff — only the weekly full crawl catches it. ✓
 
 ## Working artifacts (outside the repo)
 

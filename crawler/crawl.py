@@ -69,6 +69,73 @@ def fetch_artists_for_letter(letter, delay_s, user_agent, log):
     return artists
 
 
+def fetch_tab_body(tab, delay_s, user_agent, log):
+    """Fetch a single tab's body. Returns the catalog tab dict or None on failure."""
+    tid = tab["id"]
+    try:
+        tdata = fetch_json(f"{BASE}/tabs/tab?id={tid}", user_agent)
+        time.sleep(delay_s)
+    except (urllib.error.URLError, json.JSONDecodeError) as e:
+        log(f"    ! tab {tid} failed: {e}")
+        time.sleep(delay_s)
+        return None
+    return {
+        "id": tid,
+        "tab_type_id": tab.get("tab_type_id"),
+        "rating_stars": tab.get("rating_stars"),
+        "uploaded_by_name": tab.get("uploaded_by_name"),
+        "body": tdata.get("body", ""),
+        "chordnames": tdata.get("chordnames"),
+        "chordfingerings": tdata.get("chordfingerings"),
+        "formatting_id": tdata.get("formatting_id"),
+        "transposing": tdata.get("transposing"),
+    }
+
+
+def fetch_full_song(song, delay_s, user_agent, log, reuse_tabs=None):
+    """Fetch a song's tab list and bodies. If `reuse_tabs` is provided,
+    tabs whose ids are already there are reused without a body re-fetch."""
+    sid, sname = song["id"], song["name"]
+    try:
+        sdata = fetch_json(f"{BASE}/songs/song?id={sid}", user_agent)
+        time.sleep(delay_s)
+    except (urllib.error.URLError, json.JSONDecodeError) as e:
+        log(f"  ! song {sid} failed: {e}")
+        time.sleep(delay_s)
+        return None
+    reuse = {t["id"]: t for t in (reuse_tabs or [])}
+    out_tabs = []
+    for tab in sdata.get("tabs", []):
+        existing = reuse.get(tab["id"])
+        if existing is not None:
+            out_tabs.append(existing)
+            continue
+        result = fetch_tab_body(tab, delay_s, user_agent, log)
+        if result is not None:
+            out_tabs.append(result)
+    return {"id": sid, "name": sname, "tabs": out_tabs}
+
+
+def fetch_full_artist(aid, aname, delay_s, user_agent, log):
+    """Fetch an artist's collection + all songs + all tab bodies."""
+    try:
+        adata = fetch_json(
+            f"{BASE}/collections/collection?id={aid}&songs=1", user_agent
+        )
+        time.sleep(delay_s)
+    except (urllib.error.URLError, json.JSONDecodeError) as e:
+        log(f"  ! artist {aid} fetch failed: {e}")
+        time.sleep(delay_s)
+        return None
+    songs = adata.get("songs") or adata.get("tabs") or []
+    out_songs = []
+    for song in songs:
+        result = fetch_full_song(song, delay_s, user_agent, log)
+        if result is not None:
+            out_songs.append(result)
+    return {"id": aid, "name": aname, "songs": out_songs}
+
+
 def crawl_letter(letter, delay_s, user_agent, log):
     t0 = time.time()
     log(f"[{letter}] fetching artist list (paginated)")
@@ -76,72 +143,111 @@ def crawl_letter(letter, delay_s, user_agent, log):
     log(f"[{letter}] {len(artists)} artists")
 
     out_artists = []
-    n_songs = n_tabs = 0
-    # browse pages: ceil(artists/PAGE_SIZE) plus one final empty page (unless exact multiple)
-    browse_pages = max(1, (len(artists) + PAGE_SIZE - 1) // PAGE_SIZE)
-    if len(artists) % PAGE_SIZE == 0 and len(artists) > 0:
-        browse_pages += 1
-    req_count = browse_pages
-
     for ai, artist in enumerate(artists, 1):
-        aid, aname = artist["id"], artist["name"]
-        log(f"[{letter}] ({ai:>3}/{len(artists)}) {aname}")
-        try:
-            adata = fetch_json(
-                f"{BASE}/collections/collection?id={aid}&songs=1", user_agent
-            )
-            req_count += 1
-            time.sleep(delay_s)
-        except (urllib.error.URLError, json.JSONDecodeError) as e:
-            log(f"  ! artist {aid} fetch failed: {e}")
-            time.sleep(delay_s)
-            continue
-        songs = adata.get("songs") or adata.get("tabs") or []
+        log(f"[{letter}] ({ai:>3}/{len(artists)}) {artist['name']}")
+        result = fetch_full_artist(
+            artist["id"], artist["name"], delay_s, user_agent, log
+        )
+        if result is not None:
+            out_artists.append(result)
 
-        out_songs = []
-        for song in songs:
-            sid, sname = song["id"], song["name"]
-            try:
-                sdata = fetch_json(f"{BASE}/songs/song?id={sid}", user_agent)
-                req_count += 1
-                time.sleep(delay_s)
-            except (urllib.error.URLError, json.JSONDecodeError) as e:
-                log(f"  ! song {sid} failed: {e}")
-                time.sleep(delay_s)
-                continue
-            tabs = sdata.get("tabs", [])
-
-            out_tabs = []
-            for tab in tabs:
-                tid = tab["id"]
-                try:
-                    tdata = fetch_json(f"{BASE}/tabs/tab?id={tid}", user_agent)
-                    req_count += 1
-                    time.sleep(delay_s)
-                except (urllib.error.URLError, json.JSONDecodeError) as e:
-                    log(f"    ! tab {tid} failed: {e}")
-                    time.sleep(delay_s)
-                    continue
-                out_tabs.append({
-                    "id": tid,
-                    "tab_type_id": tab.get("tab_type_id"),
-                    "rating_stars": tab.get("rating_stars"),
-                    "uploaded_by_name": tab.get("uploaded_by_name"),
-                    "body": tdata.get("body", ""),
-                    "chordnames": tdata.get("chordnames"),
-                    "chordfingerings": tdata.get("chordfingerings"),
-                    "formatting_id": tdata.get("formatting_id"),
-                    "transposing": tdata.get("transposing"),
-                })
-                n_tabs += 1
-            out_songs.append({"id": sid, "name": sname, "tabs": out_tabs})
-            n_songs += 1
-        out_artists.append({"id": aid, "name": aname, "songs": out_songs})
-
+    n_songs = sum(len(a["songs"]) for a in out_artists)
+    n_tabs = sum(len(s["tabs"]) for a in out_artists for s in a["songs"])
     elapsed = time.time() - t0
     log(
         f"[{letter}] done: {len(out_artists)} artists, "
-        f"{n_songs} songs, {n_tabs} tabs, {req_count} reqs in {elapsed:.1f}s"
+        f"{n_songs} songs, {n_tabs} tabs in {elapsed:.1f}s"
+    )
+    return {"artists": out_artists}
+
+
+def crawl_letter_incremental(letter, existing_bucket, delay_s, user_agent, log):
+    """Diff the letter's /collections/browse list against the previous catalog
+    bucket and fetch only what changed.
+
+    Cheap signals from the API: every browse entry carries `tab_count` +
+    `song_count` per artist, and `/collections/collection?id=X` carries
+    `tab_count` per song. If those counts match what we already have, we skip
+    deeper fetches entirely. A typical no-change night ends up at ~100 requests
+    (one browse pass) rather than ~15 000.
+
+    Caveat: a tab being replaced (one removed + one added, same count) is
+    invisible to this diff. The Sunday full crawl catches those.
+    """
+    t0 = time.time()
+    log(f"[{letter}] (incremental) fetching browse list")
+    browse = fetch_artists_for_letter(letter, delay_s, user_agent, log)
+    browse_by_id = {a["id"]: a for a in browse}
+    existing_by_id = {a["id"]: a for a in (existing_bucket or {}).get("artists", [])}
+
+    out_artists = []
+    n_unchanged = n_new = n_changed = 0
+    for ba in browse:
+        aid, aname = ba["id"], ba["name"]
+        existing = existing_by_id.get(aid)
+        if existing is None:
+            log(f"[{letter}] NEW artist: {aname}")
+            result = fetch_full_artist(aid, aname, delay_s, user_agent, log)
+            if result is not None:
+                out_artists.append(result)
+                n_new += 1
+            continue
+
+        ex_song_count = len(existing.get("songs", []))
+        ex_tab_count = sum(len(s.get("tabs", [])) for s in existing.get("songs", []))
+        if (
+            ex_song_count == ba.get("song_count", -1)
+            and ex_tab_count == ba.get("tab_count", -1)
+        ):
+            out_artists.append(existing)
+            n_unchanged += 1
+            continue
+
+        log(
+            f"[{letter}] CHANGED artist: {aname} "
+            f"(songs {ex_song_count}->{ba.get('song_count')}, "
+            f"tabs {ex_tab_count}->{ba.get('tab_count')})"
+        )
+        try:
+            collection = fetch_json(
+                f"{BASE}/collections/collection?id={aid}&songs=1", user_agent
+            )
+            time.sleep(delay_s)
+        except (urllib.error.URLError, json.JSONDecodeError) as e:
+            log(f"  ! artist {aid} collection fetch failed: {e}; keeping old data")
+            out_artists.append(existing)
+            continue
+
+        existing_songs_by_id = {s["id"]: s for s in existing.get("songs", [])}
+        api_songs = collection.get("songs") or collection.get("tabs") or []
+        out_songs = []
+        for api_song in api_songs:
+            sid = api_song["id"]
+            api_tab_count = api_song.get("tab_count", 0)
+            ex_song = existing_songs_by_id.get(sid)
+            if ex_song is not None and len(ex_song.get("tabs", [])) == api_tab_count:
+                out_songs.append(ex_song)
+                continue
+            result = fetch_full_song(
+                api_song,
+                delay_s,
+                user_agent,
+                log,
+                reuse_tabs=(ex_song or {}).get("tabs"),
+            )
+            if result is not None:
+                out_songs.append(result)
+            elif ex_song is not None:
+                out_songs.append(ex_song)
+        out_artists.append({"id": aid, "name": aname, "songs": out_songs})
+        n_changed += 1
+
+    n_dropped = len(set(existing_by_id) - set(browse_by_id))
+    elapsed = time.time() - t0
+    log(
+        f"[{letter}] incremental done: {len(out_artists)} artists "
+        f"(unchanged={n_unchanged}, new={n_new}, changed={n_changed}, "
+        f"dropped={n_dropped}) in {elapsed:.1f}s"
     )
     return {"artists": out_artists}
 
@@ -205,6 +311,15 @@ def main():
         action="store_true",
         help="re-crawl letters that already have a checkpoint",
     )
+    p.add_argument(
+        "--incremental",
+        action="store_true",
+        help=(
+            "diff /collections/browse against existing catalog.json and only "
+            "fetch artists/songs/tabs whose counts have changed. Much cheaper "
+            "than a full crawl when little has changed upstream."
+        ),
+    )
     args = p.parse_args()
 
     letters = [l.strip().lower() for l in args.letters.split(",") if l.strip()]
@@ -216,7 +331,38 @@ def main():
     def log(msg):
         print(msg, file=sys.stderr, flush=True)
 
-    if not args.merge_only:
+    if args.incremental and args.merge_only:
+        log("--incremental and --merge-only are mutually exclusive")
+        sys.exit(2)
+
+    if args.incremental:
+        if not out_path.exists():
+            log(
+                f"--incremental requires an existing {out_path}; "
+                "run a full crawl first."
+            )
+            sys.exit(2)
+        existing = json.loads(out_path.read_text(encoding="utf-8"))
+        existing_letters = existing.get("letters", {})
+        # Seed checkpoints so a partial run still merges into a complete catalog:
+        # any letter we don't reach today keeps its existing bucket.
+        for letter, bucket in existing_letters.items():
+            cp = checkpoint_dir / f"{letter}.json"
+            if not cp.exists():
+                write_json(cp, bucket)
+        for letter in letters:
+            cp = checkpoint_dir / f"{letter}.json"
+            existing_bucket = existing_letters.get(letter)
+            try:
+                result = crawl_letter_incremental(
+                    letter, existing_bucket, delay_s, args.user_agent, log
+                )
+            except Exception as e:
+                log(f"[{letter}] incremental FAILED: {e}; keeping existing bucket")
+                continue
+            write_json(cp, result)
+            log(f"[{letter}] wrote {cp}")
+    elif not args.merge_only:
         for letter in letters:
             cp = checkpoint_dir / f"{letter}.json"
             if cp.exists() and not args.force:
