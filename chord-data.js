@@ -55,18 +55,27 @@ export const CHORD_FINGERINGS = {
   Bb7: { positions: [-1, 1, 3, 1, 3, 1], barre: { fret: 1, from: 1, to: 5 } },
   H7:  { positions: [-1, 2, 1, 2, 0, 2] },
   C7:  { positions: [-1, 3, 2, 3, 1, 0] },
+  'C#7':{ positions: [-1, 4, 6, 4, 6, 4], lowestFret: 4, barre: { fret: 4, from: 1, to: 5 } },
   D7:  { positions: [-1, -1, 0, 2, 1, 2] },
+  Eb7: { positions: [-1, 6, 8, 6, 8, 6], lowestFret: 6, barre: { fret: 6, from: 1, to: 5 } },
   E7:  { positions: [0, 2, 0, 1, 0, 0] },
+  E9:  { positions: [0, 2, 0, 1, 3, 2] },
   F7:  { positions: [1, 3, 1, 2, 1, 1], barre: { fret: 1, from: 0, to: 5 } },
   'F#7':{ positions: [2, 4, 2, 3, 2, 2], lowestFret: 2, barre: { fret: 2, from: 0, to: 5 } },
   G7:  { positions: [3, 2, 0, 0, 0, 1] },
+  A7sus4: { positions: [-1, 0, 2, 0, 3, 0] },
 
   // --- Minor 7 ---
   Am7:  { positions: [-1, 0, 2, 0, 1, 0] },
   Hm7:  { positions: [-1, 2, 0, 2, 0, 2] },
+  Cm7:  { positions: [-1, 3, 5, 3, 4, 3], lowestFret: 3, barre: { fret: 3, from: 1, to: 5 } },
+  'C#m7':{ positions: [-1, 4, 6, 4, 5, 4], lowestFret: 4, barre: { fret: 4, from: 1, to: 5 } },
   Dm7:  { positions: [-1, -1, 0, 2, 1, 1] },
   Em7:  { positions: [0, 2, 0, 0, 0, 0] },
+  Fm7:  { positions: [1, 3, 1, 1, 1, 1], barre: { fret: 1, from: 0, to: 5 } },
   'F#m7':{ positions: [2, 4, 2, 2, 2, 2], lowestFret: 2, barre: { fret: 2, from: 0, to: 5 } },
+  Gm7:  { positions: [3, 5, 3, 3, 3, 3], lowestFret: 3, barre: { fret: 3, from: 0, to: 5 } },
+  'G#m7':{ positions: [4, 6, 4, 4, 4, 4], lowestFret: 4, barre: { fret: 4, from: 0, to: 5 } },
 
   // --- Major 7 ---
   Cmaj7: { positions: [-1, 3, 2, 0, 0, 0] },
@@ -85,17 +94,26 @@ export const CHORD_FINGERINGS = {
   Dsus4: { positions: [-1, -1, 0, 2, 3, 3] },
   Esus4: { positions: [0, 2, 2, 2, 0, 0] },
   Gsus4: { positions: [3, 3, 0, 0, 1, 3] },
+  Hsus4: { positions: [-1, 2, 4, 4, 5, 2], lowestFret: 2, barre: { fret: 2, from: 1, to: 5 } },
+  Aadd9: { positions: [-1, 0, 2, 4, 2, 0] },
   Cadd9: { positions: [-1, 3, 2, 0, 3, 0] },
+  Dadd9: { positions: [2, 0, 0, 2, 3, 0] },
   Emaj7: { positions: [0, 2, 1, 1, 0, 0] },
+
+  // --- 6th chords ---
+  G6: { positions: [3, 2, 0, 0, 0, 0] },
+  A6: { positions: [-1, 0, 2, 2, 2, 2] },
 
   // --- Minor extras ---
   Ebm: { positions: [-1, 6, 8, 8, 7, 6], lowestFret: 6, barre: { fret: 6, from: 1, to: 5 } },
 
   // --- Power chords (root + 5th + octave on low strings) ---
-  E5: { positions: [0, 2, 2, -1, -1, -1] },
-  A5: { positions: [-1, 0, 2, 2, -1, -1] },
-  D5: { positions: [-1, -1, 0, 2, 3, -1] },
-  G5: { positions: [3, 5, 5, -1, -1, -1] },
+  E5:  { positions: [0, 2, 2, -1, -1, -1] },
+  A5:  { positions: [-1, 0, 2, 2, -1, -1] },
+  H5:  { positions: [-1, 2, 4, 4, -1, -1] },
+  C5:  { positions: [-1, 3, 5, 5, -1, -1] },
+  D5:  { positions: [-1, -1, 0, 2, 3, -1] },
+  G5:  { positions: [3, 5, 5, -1, -1, -1] },
 
   // --- Common slash chords ---
   'D/F#': { positions: [2, 0, 0, 2, 3, 2] },
@@ -116,19 +134,44 @@ export const CHORD_FINGERINGS = {
 const ALIASES = {
   // English B-naming → Norwegian H-naming
   B: 'H', Bm: 'Hm', B7: 'H7', Bmaj7: 'Hmaj7', Bm7: 'Hm7',
+  Bsus4: 'Hsus4', B5: 'H5',
   'G/B': 'G/H',
-  // Enharmonics
+  // Enharmonics: pick the spelling more common in the catalog as canonical,
+  // alias the other in. (See chord-data audit in PLAN.md / commit history.)
   'A#': 'Bb', 'A#m': 'Bbm', 'A#7': 'Bb7',
-  'D#': 'Eb',
-  Ab: 'G#', Abm: 'G#m',
-  Db: 'C#', Dbm: 'C#m',
-  Gb: 'F#', Gbm: 'F#m',
+  'D#': 'Eb', 'D#m': 'Ebm', 'D#7': 'Eb7',
+  Ab: 'G#', Abm: 'G#m', 'Abm7': 'G#m7',
+  Db: 'C#', Dbm: 'C#m', 'Dbm7': 'C#m7', 'Db7': 'C#7',
+  Gb: 'F#', Gbm: 'F#m', 'Gbm7': 'F#m7', 'Gb7': 'F#7',
+  // "Xmaj" with no number is just the X major triad. nortabs.net uploaders
+  // occasionally write Gmaj where they mean G; alias the bare-suffix case.
+  Cmaj: 'C', Dmaj: 'D', Emaj: 'E', Fmaj: 'F', Gmaj: 'G', Amaj: 'A', Hmaj: 'H',
+  Bmaj: 'H',
+  // Some uploaders use a capital-M suffix to mean "major 7" (the more usual
+  // convention is "maj7" or a triangle "Δ"). Specific aliases override the
+  // generic case-fold rule below which would otherwise turn "CM" into "Cm".
+  CM: 'Cmaj7', FM: 'Fmaj7',
 };
 
 /**
- * Look up the fingering for a chord name. Two-stage fallback:
+ * Normalise common spelling slips before lookup. The chord root (one
+ * letter, optionally followed by # or b) keeps its case; everything else
+ * lowercases. Catches uploader typos like "EM" → "Em", "AM" → "Am",
+ * "DSUS4" → "Dsus4".
+ */
+function caseNormalize(name) {
+  if (!name) return name;
+  const isAccidental = name.length > 1 && (name[1] === '#' || name[1] === 'b');
+  const rootLen = isAccidental ? 2 : 1;
+  return name.slice(0, rootLen) + name.slice(rootLen).toLowerCase();
+}
+
+/**
+ * Look up the fingering for a chord name. Three-stage fallback:
  *   1. Direct match (with alias normalisation).
- *   2. Slash-chord with a bass note we don't have a diagram for:
+ *   2. Case-normalised match — uploader typos like "EM"/"AM" resolve to
+ *      Em/Am here.
+ *   3. Slash-chord with a bass note we don't have a diagram for:
  *      strip the bass and look up the base chord. Visegrep-friendly —
  *      "Am/E" renders as the Am shape since the bass-note difference
  *      is the kind of "weird stuff" beginners can ignore.
@@ -136,11 +179,19 @@ const ALIASES = {
  */
 export function getChordFingering(name) {
   if (!name) return null;
+  // Stage 1: direct
   const direct = CHORD_FINGERINGS[ALIASES[name] ?? name];
   if (direct) return direct;
+  // Stage 2: case-normalised suffix
+  const normalized = caseNormalize(name);
+  if (normalized !== name) {
+    const viaCase = CHORD_FINGERINGS[ALIASES[normalized] ?? normalized];
+    if (viaCase) return viaCase;
+  }
+  // Stage 3: slash chord, strip the bass note
   const slashIdx = name.indexOf('/');
   if (slashIdx > 0) {
-    const base = name.slice(0, slashIdx);
+    const base = caseNormalize(name.slice(0, slashIdx));
     return CHORD_FINGERINGS[ALIASES[base] ?? base] ?? null;
   }
   return null;
