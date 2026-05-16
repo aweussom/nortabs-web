@@ -40,7 +40,11 @@ export const CHORD_FINGERINGS = {
   // --- Minor ---
   Am:   { positions: [-1, 0, 2, 2, 1, 0] },
   Bbm:  { positions: [-1, 1, 3, 3, 2, 1], barre: { fret: 1, from: 1, to: 5 } },
-  Hm:   { positions: [-1, 2, 4, 4, 3, 2], barre: { fret: 2, from: 1, to: 5 } },
+  // Visegrep variant: open A string in the bass, mute the low E. Technically
+  // Hm/A (A is the b7 over B-minor → also reads as Hm7 without the B root),
+  // but it sits cleanly inside folk/vise contexts and avoids the A-shape
+  // barre. Trade-off accepted per Tommy: "klinger faktisk ganske greit".
+  Hm:   { positions: [-1, 0, 4, 4, 3, 2] },
   Cm:   { positions: [-1, 3, 5, 5, 4, 3], lowestFret: 3, barre: { fret: 3, from: 1, to: 5 } },
   'C#m':{ positions: [-1, 4, 6, 6, 5, 4], lowestFret: 4, barre: { fret: 4, from: 1, to: 5 } },
   Dm:   { positions: [-1, -1, 0, 2, 3, 1] },
