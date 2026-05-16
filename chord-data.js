@@ -147,10 +147,15 @@ const ALIASES = {
   // occasionally write Gmaj where they mean G; alias the bare-suffix case.
   Cmaj: 'C', Dmaj: 'D', Emaj: 'E', Fmaj: 'F', Gmaj: 'G', Amaj: 'A', Hmaj: 'H',
   Bmaj: 'H',
-  // Some uploaders use a capital-M suffix to mean "major 7" (the more usual
-  // convention is "maj7" or a triangle "Δ"). Specific aliases override the
-  // generic case-fold rule below which would otherwise turn "CM" into "Cm".
-  CM: 'Cmaj7', FM: 'Fmaj7',
+  // Some uploaders use a capital-M suffix as shorthand for "major 7" (more
+  // usual conventions are "maj7" or the triangle "Δ"). Empirical check
+  // 2026-05-16: 18 tabs have BOTH "EM" and "Em" as distinct chord names,
+  // 8 tabs do the same with AM/Am — that's evidence the uploaders treat
+  // them as different chords, not typos. So "XM" = "Xmaj7" universally.
+  // These specific aliases override the generic case-fold rule that would
+  // otherwise lowercase "EM" → "Em".
+  CM: 'Cmaj7', DM: 'Dmaj7', EM: 'Emaj7', FM: 'Fmaj7',
+  GM: 'Gmaj7', AM: 'Amaj7', HM: 'Hmaj7', BM: 'Hmaj7',
 };
 
 /**

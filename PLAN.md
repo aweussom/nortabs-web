@@ -225,19 +225,24 @@ When the time comes, candidates for the backend: Supabase (free tier, Postgres +
   - Likely path: do (1) the moment Pages' gzip handling ever feels insufficient (~half a day of work). Graduate to (2) only when real heap-pressure measurements demand it. Skip (3) unless cold-start parse time becomes a real complaint.
   - Cross-cutting concern: cache-busting (`?v=${APP_VERSION}`) needs to apply to whichever asset(s) we ship, including the per-letter buckets in path (2).
 
-- **Capo-required visegrep transposition** (planned, not yet built):
+- **Capo-first visegrep transposition** (planned, not yet built):
   - nortabs.net offers per-semitone transposition. That's not what most casual players want — semitone shifts often land in keys like F♯ or C♯ where every other chord becomes a barre, and you've made the song *harder* to play. Tommy's principle, transcribed verbatim: *"Transponering bør IMNHO KUN gå til 'spillbare visegrep'"*.
-  - **Capo is required.** Every transposition suggestion is *"Capo at fret N, play as key X"* — never bare *"transpose down ½ step, learn new shapes"*. This keeps the player on the open shapes they already know (C, D, E, G, A, Am, Em, Dm) and uses the capo to shift pitch. The fallback chord-letter shifts that nortabs.net offers are not in scope.
-  - **Algorithm**:
+  - **Capo is the default, strongly hinted; chord-letter shifts only via an "Advanced" toggle.** Default UX presents capo positions that keep the player on open shapes they already know (C, D, E, G, A, Am, Em, Dm). The escape hatch *"Advanced mode → vanlig transponering"* unlocks the per-semitone chord-letter shifts for users who can't (or won't) use a capo, but the default path doesn't expose them.
+  - **Example UX**:
+    > **Transponer G → A**
+    > → *"Sett capo i 2. bånd — spill som G-dur (anbefalt — alt åpent)"*
+    > → *"Advanced mode → vanlig transponering"* (unfolds chord-letter shifts at +2 semitones)
+  - **Algorithm** (default capo path):
     1. Determine the song's effective key Y (from the chord set, or just from `tab.chordnames`).
     2. For each candidate capo position N (0-7; higher than 7 is impractical and silly-looking):
        - Compute "play as" key X = Y − N semitones.
        - Score X by **% of the song's chords whose transposed equivalent has an open / non-barre fingering** in `chord-data.js`. Likely flag each fingering entry with `visegrep: true | false` rather than infer from `barre`.
-    3. Surface the **top 2-3 (N, X) pairs**, not all 12 semitones. Buttons read e.g. *"Capo 3 — spill som D-dur (alt åpent)"* or *"Capo 0 — som vist (1 barré: Bm)"*. The N=0 (no-capo) option is always offered as the "what's on screen" baseline.
-    4. **Pitch preservation only.** Capo can only raise pitch, never lower. If the player wants a *different* audible key (e.g. lower their voice's comfort), that's outside scope of this feature — capo-only transposition preserves audible pitch by definition.
-  - **UX**:
+    3. Surface the **top 2-3 (N, X) pairs**, not all 12 semitones. Buttons read e.g. *"Capo 3 — spill som D-dur (alt åpent)"* or *"Capo 0 — som vist (1 barré: Hm)"*. The N=0 (no-capo) option is always offered as the "what's on screen" baseline.
+    4. **Capo preserves audible pitch.** Capo can only raise pitch, never lower. The capo path is therefore explicitly *"keep the song sounding the same but fingerings simpler"*. Players who genuinely want to *change* audible key (e.g. lower their voice's comfort) take the Advanced-mode path.
+  - **UX details**:
     - When user picks a capo+key, the chord-name strings in the tab body and the chord-diagram foldout both re-render with the transposed names. The fingerings stay open-shape.
     - Persist the choice per-tab in localStorage (same store as `getTextScale` / `getPlaybackDuration`) so reopening the tab restores the player's preferred capo position.
+    - Advanced-mode toggle is per-user (not per-tab) — once a player turns it on, every tab shows the full per-semitone transpose controls.
   - Builds on the existing `chord-data.js` + `chord-diagrams.js`: the same fingering database that drives the foldout tells us which keys are "playable" for a given song's chord set.
 
 - **Reorder tabs within a songbook**: musicians need to rearrange set lists. Implement up/down arrow buttons next to each tab in the songbook detail view. Don't bother with HTML5 native drag-and-drop — bad on touch, and the music-stand-on-phone use case is touch-first. Vanilla ↑/↓ buttons work everywhere, accessible, ~30 lines of code.
