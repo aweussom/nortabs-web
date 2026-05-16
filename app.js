@@ -48,3 +48,10 @@ async function main() {
 }
 
 main();
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js', { type: 'module' })
+      .catch((err) => console.warn('[sw] registration failed:', err));
+  });
+}
