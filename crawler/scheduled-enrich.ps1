@@ -36,7 +36,7 @@
 #>
 
 param(
-  [string]$RepoRoot = "C:\devel\python\nortabs-web",
+  [string]$RepoRoot = "C:\devel\aweussom\javascript\nortabs-web",
   [string]$LogPath  = "crawler/scheduled-enrich.log"
 )
 
