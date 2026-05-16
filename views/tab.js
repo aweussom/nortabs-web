@@ -14,6 +14,8 @@ import {
   setPlaybackStartY,
   getTextScale,
   setTextScale,
+  getChordMode,
+  setChordMode,
   TEXT_SCALE_MIN,
   TEXT_SCALE_MAX,
   TEXT_SCALE_STEP,
@@ -101,6 +103,9 @@ export function renderTabUI(root, refs, backLink, opts = {}) {
   const chords = chordnames.length
     ? `<details class="chords-foldout">
          <summary><span class="chords">Chords: ${escapeHtml(chordnames.join(' '))}</span></summary>
+         <div class="chord-mode-row" hidden>
+           <button type="button" class="chord-mode-toggle"></button>
+         </div>
          <div class="chord-diagrams" aria-label="Akkorddiagrammer"></div>
        </details>`
     : '';
@@ -145,22 +150,48 @@ export function renderTabUI(root, refs, backLink, opts = {}) {
 
 /**
  * Populate the chord-foldout body with SVG diagrams for every chord we have
- * fingering data for. Chords we don't know fall back to plain text, so the
- * user can still see what's used even if we can't draw it.
+ * fingering data for. Chords we don't know fall back to plain text. A
+ * global "vise ↔ barré" toggle appears at the top of the foldout if at
+ * least one of this tab's chords has both voicings available — clicking
+ * it re-renders every diagram and persists the choice in localStorage.
  */
 function wireChordDiagrams(root, chordnames) {
   const container = root.querySelector('.chord-diagrams');
   if (!container || chordnames.length === 0) return;
-  for (const name of chordnames) {
-    const fingering = getChordFingering(name);
-    if (fingering) {
-      container.appendChild(renderChordSvg(name, fingering));
-    } else {
-      const fallback = document.createElement('span');
-      fallback.className = 'chord-diagram-fallback';
-      fallback.textContent = name;
-      container.appendChild(fallback);
+
+  const fingerings = chordnames.map(name => ({ name, fingering: getChordFingering(name) }));
+  const hasAnyAlt = fingerings.some(f => f.fingering?.alt);
+
+  const renderAll = () => {
+    container.innerHTML = '';
+    const mode = getChordMode();
+    for (const { name, fingering } of fingerings) {
+      if (!fingering) {
+        const span = document.createElement('span');
+        span.className = 'chord-diagram-fallback';
+        span.textContent = name;
+        container.appendChild(span);
+        continue;
+      }
+      const display = (mode === 'barre' && fingering.alt) ? fingering.alt : fingering;
+      container.appendChild(renderChordSvg(name, display));
     }
+  };
+  renderAll();
+
+  if (hasAnyAlt) {
+    const row = root.querySelector('.chord-mode-row');
+    const btn = root.querySelector('.chord-mode-toggle');
+    row.hidden = false;
+    const updateLabel = () => {
+      btn.textContent = getChordMode() === 'barre' ? '← Vis visegrep' : 'Vis barré-grep →';
+    };
+    updateLabel();
+    btn.addEventListener('click', () => {
+      setChordMode(getChordMode() === 'barre' ? 'vise' : 'barre');
+      updateLabel();
+      renderAll();
+    });
   }
 }
 

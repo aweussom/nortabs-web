@@ -29,28 +29,99 @@ export const CHORD_FINGERINGS = {
   D:   { positions: [-1, -1, 0, 2, 3, 2] },
   Eb:  { positions: [-1, 6, 8, 8, 8, 6], lowestFret: 6, barre: { fret: 6, from: 1, to: 5 } },
   E:   { positions: [0, 2, 2, 1, 0, 0] },
-  F:   { positions: [1, 3, 3, 2, 1, 1], barre: { fret: 1, from: 0, to: 5 } },
+  F:   {
+    // Visegrep default: x on the deep E, B and high-E share a small fret-1
+    // mini-barre with the index finger. Tommy: "F-Dur tar jeg nesten alltid
+    // med X på dyp E".
+    positions: [-1, 3, 3, 2, 1, 1],
+    barre: { fret: 1, from: 4, to: 5 },
+    label: 'vise',
+    alt: {
+      positions: [1, 3, 3, 2, 1, 1],
+      barre: { fret: 1, from: 0, to: 5 },
+      label: 'barré',
+    },
+  },
   'F#':{ positions: [2, 4, 4, 3, 2, 2], lowestFret: 2, barre: { fret: 2, from: 0, to: 5 } },
   G:   { positions: [3, 2, 0, 0, 0, 3] },
   'G#':{ positions: [4, 6, 6, 5, 4, 4], lowestFret: 4, barre: { fret: 4, from: 0, to: 5 } },
   A:   { positions: [-1, 0, 2, 2, 2, 0] },
-  Bb:  { positions: [-1, 1, 3, 3, 3, 1], barre: { fret: 1, from: 1, to: 5 } },
+  Bb:  {
+    // Visegrep default: 4-string, mute low E and A, mini-barre on the
+    // top four strings (D-G-B at fret 3, plus the high-E shifts to fret 1
+    // via a separate fingering — index for the high-E, ring-finger 3-string
+    // barre for D-G-B). Tommy: "Bb som 4-streng er også bra".
+    positions: [-1, -1, 3, 3, 3, 1],
+    barre: { fret: 3, from: 2, to: 4 },
+    label: 'vise',
+    alt: {
+      positions: [-1, 1, 3, 3, 3, 1],
+      barre: { fret: 1, from: 1, to: 5 },
+      label: 'barré',
+    },
+  },
   H:   { positions: [-1, 2, 4, 4, 4, 2], barre: { fret: 2, from: 1, to: 5 } },
 
   // --- Minor ---
   Am:   { positions: [-1, 0, 2, 2, 1, 0] },
   Bbm:  { positions: [-1, 1, 3, 3, 2, 1], barre: { fret: 1, from: 1, to: 5 } },
-  // Visegrep variant: open A string in the bass, mute the low E. Technically
-  // Hm/A (A is the b7 over B-minor → also reads as Hm7 without the B root),
-  // but it sits cleanly inside folk/vise contexts and avoids the A-shape
-  // barre. Trade-off accepted per Tommy: "klinger faktisk ganske greit".
-  Hm:   { positions: [-1, 0, 4, 4, 3, 2] },
-  Cm:   { positions: [-1, 3, 5, 5, 4, 3], lowestFret: 3, barre: { fret: 3, from: 1, to: 5 } },
+  Hm: {
+    // Visegrep default: open A string in the bass, mute the low E.
+    // Technically Hm/A (A is the b7 over B-minor → also reads as Hm7
+    // without the B root), but sits cleanly in folk/vise contexts and
+    // avoids the A-shape barre. Tommy: "klinger faktisk ganske greit".
+    positions: [-1, 0, 4, 4, 3, 2],
+    label: 'vise',
+    alt: {
+      positions: [-1, 2, 4, 4, 3, 2],
+      barre: { fret: 2, from: 1, to: 5 },
+      label: 'barré',
+    },
+  },
+  Cm:   {
+    // Default: A-shape barre at fret 3. Tommy: "C-moll KAN tas som
+    // 4-streng i nødsfall" — barre is still the right default; the
+    // 4-string version is offered as an alt for the player who can't
+    // (yet) barre.
+    positions: [-1, 3, 5, 5, 4, 3],
+    lowestFret: 3,
+    barre: { fret: 3, from: 1, to: 5 },
+    label: 'barré',
+    alt: {
+      positions: [-1, -1, 5, 5, 4, 3],
+      lowestFret: 3,
+      barre: { fret: 3, from: 2, to: 3 },
+      label: 'vise',
+    },
+  },
   'C#m':{ positions: [-1, 4, 6, 6, 5, 4], lowestFret: 4, barre: { fret: 4, from: 1, to: 5 } },
   Dm:   { positions: [-1, -1, 0, 2, 3, 1] },
   Em:   { positions: [0, 2, 2, 0, 0, 0] },
-  Fm:   { positions: [1, 3, 3, 1, 1, 1], barre: { fret: 1, from: 0, to: 5 } },
-  'F#m':{ positions: [2, 4, 4, 2, 2, 2], lowestFret: 2, barre: { fret: 2, from: 0, to: 5 } },
+  Fm:   {
+    // Visegrep default: 4-string, mute low E and A. Tommy: "F-moll også
+    // som 4-streng".
+    positions: [-1, -1, 3, 1, 1, 1],
+    barre: { fret: 1, from: 3, to: 5 },
+    label: 'vise',
+    alt: {
+      positions: [1, 3, 3, 1, 1, 1],
+      barre: { fret: 1, from: 0, to: 5 },
+      label: 'barré',
+    },
+  },
+  'F#m': {
+    // Visegrep default: 4-string, mute low E and A, partial mini-barre on
+    // the top three strings at fret 2. Tommy: "Din variant ser bra ut".
+    positions: [-1, -1, 4, 2, 2, 2],
+    barre: { fret: 2, from: 3, to: 5 },
+    label: 'vise',
+    alt: {
+      positions: [2, 4, 4, 2, 2, 2],
+      lowestFret: 2,
+      barre: { fret: 2, from: 0, to: 5 },
+      label: 'barré',
+    },
+  },
   Gm:   { positions: [3, 5, 5, 3, 3, 3], lowestFret: 3, barre: { fret: 3, from: 0, to: 5 } },
   'G#m':{ positions: [4, 6, 6, 4, 4, 4], lowestFret: 4, barre: { fret: 4, from: 0, to: 5 } },
 

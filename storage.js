@@ -2,6 +2,30 @@ const KEY = 'nortabs:songbooks:v1';
 const PB_KEY = 'nortabs:playback:v1';
 const PB_DEFAULT_DURATION_S = 180;
 const TS_KEY = 'nortabs:textscale:v1';
+const CHORD_MODE_KEY = 'nortabs:chord-mode:v1';
+
+/**
+ * Global chord-rendering preference: 'vise' (default — open / visegrep
+ * voicings) or 'barre' (full-barre voicings where the chord has both).
+ * Persists across sessions. Will eventually merge with the planned
+ * "Advanced mode" toggle in PLAN.md, which also unlocks per-semitone
+ * transposition.
+ */
+export function getChordMode() {
+  try {
+    return localStorage.getItem(CHORD_MODE_KEY) === 'barre' ? 'barre' : 'vise';
+  } catch {
+    return 'vise';
+  }
+}
+
+export function setChordMode(mode) {
+  try {
+    if (mode === 'barre') localStorage.setItem(CHORD_MODE_KEY, 'barre');
+    else localStorage.removeItem(CHORD_MODE_KEY);
+  } catch {}
+  return getChordMode();
+}
 
 export const TEXT_SCALE_MIN = 0.7;
 export const TEXT_SCALE_MAX = 2.0;
