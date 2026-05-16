@@ -278,29 +278,59 @@ When the time comes, candidates for the backend: Supabase (free tier, Postgres +
   - **Import UX**: extend the planned `#/import` page (currently UG-only) to accept multiple file types. Drag-drop or file picker, sniff format from extension/content, route to the right parser. Show preview before commit ("Found 12 songs in 'sangbok-2024.docx', import all?").
   - Same songbook/search/export integration as UG private tabs — once a tab is in `nortabs:private-tabs:v1`, it's first-class regardless of source.
 
-- **Ultimate Guitar bookmark import** (planned, not yet built):
-  - **Acquisition**: user installs a TamperMonkey/GreaseMonkey userscript that runs on ultimate-guitar.com, scrapes the logged-in user's bookmarked tabs (artist, song name, body, chordnames, source URL), and downloads a JSON file.
-  - **Import UX**: new `#/import` page in the app with a `<input type="file">` (drag-drop welcome). User picks the JSON, app parses it, shows a confirm dialog with the count ("Found 47 tabs from Ultimate Guitar. Import all?"), then writes to `localStorage["nortabs:private-tabs:v1"]`.
+- **Ultimate Guitar bookmark import** (userscript shipped + validated on real data; NorTabs-side import UI still to build):
+  - **Scope: chord/lyric only.** NorTabs is "tekst & akkorder". UG's chord tabs (chord-letters-over-lyrics, the same format as nortabs.net catalog) are the only first-class target. UG also publishes "Tab" (string-by-string fret notation), "Bass", and "Drum" tabs — these are *imported* but tagged via `tab_type`, and the renderer can grey them out or hide them. Proper guitar-tablature rendering is out of scope — someone else can build that on top later. Most useful UG bookmarks are "Chords" type anyway.
+  - **Acquisition** (✅ implemented, validated on Tommy's real 259-bookmark UG account: 253 OK / 6 failed): a Tampermonkey/Violentmonkey/Greasemonkey userscript runs on `ultimate-guitar.com/user/mytabs*`. It injects a floating "⬇ Eksporter til NorTabs" button, then on click:
+    1. Scrapes the bookmark list from the DOM (`article[isdesktop=true] div` rows yield `{artist, title, link}` — works as of 2026-05).
+    2. For each entry, fetches the tab page with `credentials: 'same-origin'` (sends the user's UG session cookies, so paid Official Tabs unlock for Pro/Lifetime subscribers — `omit` left them locked).
+    3. Parses `window.UGAPP.store.page.data.tab_view.wiki_tab.content` out of the page's `<div class="js-store" data-content="…">` JSON state.
+    4. Decodes HTML entities (UG stores Norwegian/Swedish chars as `&Auml;`, `&oslash;`, `&aring;` etc.) by round-tripping through a throwaway `<textarea>`.
+    5. Extracts chord names from inline `[ch]X[/ch]` markup before keeping the rest of the body raw.
+    6. Politeness delay of 800 ms between requests. Full 259-bookmark run completes in ~3.5 minutes.
+    7. Downloads `nortabs-ug-import-YYYY-MM-DD.json` with `{version, exported_at, ok_count, failed_count, tabs[], failed[]}`.
+    
+    Gotchas:
+    - **UG paginates bookmarks at 50/100/All.** User must set the page-size filter to "All" first so all entries live in the DOM before the script runs — otherwise it only scrapes the visible page.
+    - **The remaining ~2 % failure rate is concentrated on UG Official Tabs that publishers protect against scraping more aggressively** (even with valid session cookies for Pro/Lifetime users). These come back with `tab_view.wiki_tab.content` empty. Workaround: bookmark the free `-chords-` community version of those songs instead. Empirically 6 of 259 failed this way — Hotel California, Twist And Shout, Brown Eyed Girl, Down On The Corner, Tennessee Whiskey, Shallow. The pattern: all have `-official-` in the URL, all are big radio-canon songs with active publisher monitoring.
+    
+    Source: `crawler/userscripts/nortabs-ug-exporter.user.js`. Install in a userscript manager (Tampermonkey, Violentmonkey, or Greasemonkey) — all three accept the same `// ==UserScript==` header format.
+  - **Import UX** (still to build): new `#/import` page in the app with `<input type="file">` (drag-drop welcome). User picks the JSON, app parses it, shows a confirm dialog with the count ("Found 253 tabs from Ultimate Guitar. Import all?"), then writes to `localStorage["nortabs:private-tabs:v1"]` and creates/merges the songbook (see Surface below).
+  - **Body format**: kept faithfully raw in the JSON export — `[ch]X[/ch]`, `[tab]…[/tab]`, `[Verse]`/`[Chorus]`/`[Bridge]` section markers, UG `#PLEASE NOTE` legal preambles, even USENET-era email headers in old chord charts — all preserved verbatim. The NorTabs *import-side* strips lossless wrapping (`[ch]X[/ch]` → `X`, `[tab]…[/tab]` → contents) to save ~30 % localStorage footprint without semantic loss (chord letter stays in the same column position). Section markers stay. Cosmetic noise (legalese preamble, email headers, `Set8`-style signatures) is hidden at render-time via regex filters in the view, not stripped at import — too varied to detect safely without losing real content.
+  - **Surface: songbook model.** Each UG import operation creates or merges into a single `"ug-import-main"` songbook ("Mine UG-importer"). UG-imported tabs are *not* surfaced via the catalog browse-by-letter path — no shadow artists, no badges on artist pages, no song-count integration. Reuses the existing songbook infrastructure (list view, share-via-URL, ×4 search-boost for songbook members). Mental model is one line: *import → ny sangbok*. The user can manually drag UG tabs into other curated songbooks ("Sommerleir 2026") as needed; that's a normal songbook membership operation, not import-side magic.
   - **Storage schema**:
     ```json
-    { "version": 1, "tabs": {
+    nortabs:private-tabs:v1 → {
+      "version": 1,
+      "tabs": {
         "ug-12345": {
           "id": "ug-12345",
           "source": "ultimate-guitar",
-          "source_url": "https://www.ultimate-guitar.com/...",
+          "source_url": "https://tabs.ultimate-guitar.com/...",
+          "tab_type": "Chords",
           "artist": "Townes Van Zandt",
           "song": "Tecumseh Valley",
-          "body": "...chord text...",
+          "body": "...chord text (UG wrappers stripped at import)...",
           "chordnames": ["C","G","Am"],
-          "imported_at": "..."
+          "imported_at": "2026-05-16T10:02:31Z"
         }
-    }}
+      }
+    }
+    nortabs:songbooks:v1 → existing schema, with one extra entry:
+      { "id": "ug-import-main", "name": "Mine UG-importer", "tab_ids": ["ug-12345", ...] }
     ```
-  - **Catalog integration**: `getTab(id)` (catalog.js) checks the private-tabs store as a fallback when the ID is a string starting with `ug-`. Tab view, search index builder, and songbook membership all treat private tabs identically to catalog tabs (with a small visual "UG"-badge). Routes `#/tab/ug-12345` work natively.
-  - **Songbook sharing**: a shared songbook URL containing `ug-12345` IDs is meaningless to the recipient — they don't have the body. Two options to decide later: (a) inline the tab body in the share URL for private tabs (URLs become big — ~7 KB per private tab uncompressed), or (b) render placeholders with "private tab, ask sender for an export". Default to (b) for v1.
-  - **Re-import**: identify by `source_url`. Same URL → replace body (preserve songbook memberships). Different URL → new entry.
-  - **Storage budget**: 5-10 MB localStorage limit. Avg UG tab body ~5-15 KB. Hundreds of imported tabs fit comfortably.
+  - **Search index**: at startup, `search.js`'s index builder walks `nortabs:private-tabs:v1` in addition to the catalog, so UG-imported tabs are indexed with the same artist/song/body weighting. Songbook-membership boost (×4) applies automatically since they're in `"ug-import-main"`. ~10 lines of additional indexer code.
+  - **Route `#/tab/ug-12345`**: `catalog.js`'s `getTab()` checks `nortabs:private-tabs:v1` when the ID starts with `ug-`. Returns `{tab, song, artist, letter}` shape mirroring the catalog accessor so views need no per-source branching beyond a small "UG"-badge when `source === 'ultimate-guitar'`.
+  - **Songbook sharing**: a shared songbook URL containing `ug-12345` IDs is meaningless to recipients — their NorTabs install has no body for that ID. v1: render placeholders with "Privat tab — be avsender om eksport". v2 candidate: inline the tab body in the share URL for private tabs (~7 KB per private tab uncompressed; gzip on the wire helps). Default to v1.
+  - **Re-import logic**: identify by `id` (UG tab IDs are stable and globally unique within UG). If `nortabs:songbooks:v1["ug-import-main"]` already exists, merge new tab IDs into its `tab_ids` (preserve user-added tabs, dedupe). For each tab in the new import: if the ID already exists in `private-tabs:v1`, replace the body (preserve songbook memberships in *user-curated* songbooks like "Sommerleir 2026"); if new, add. Tabs removed from UG bookmarks since last import are *not* deleted from NorTabs — orphan-removal would require user intent and is deferred.
+  - **Storage budget**: 253 real tabs from Tommy's UG account = 1.1 MB raw JSON, ~770 KB after `[ch]/[tab]`-stripping at import. Roughly 12-22 % of a 5-10 MB localStorage budget. Comfortable headroom for UG alone. Real pressure starts when Word/sangbok-import lands (see Personal Library Import below).
   - **IndexedDB fallback when localStorage fills up** (likely once the Word/sangbok import lands — Tommy has thousands of personal docs at ~10-50 KB each, which easily exceeds 5-10 MB): migrate `nortabs:private-tabs:v1` to IndexedDB. ~50 % of available disk per origin (gigabytes in practice), async API doesn't block the main thread on large reads, structured object stores support indexed lookups. One-shot migration: on first run after the cutover, read the localStorage payload, `put()` each tab into an object store, delete the old key. `getTab()` becomes async — small refactor across `views/tab.js` and the search-index builder (which already walks all private tabs at startup). Songbooks (small, ID-only) stay in localStorage indefinitely. Catalog + enrichment stay shipped JSON — IndexedDB is only for per-user mutable content.
+  - **Search asymmetry without enrichment, by design (Phase 1-4).** UG-imported tabs are indexed on artist + song + body text only — they do **not** get the LLM-tagged semantic layer (`country`, `region`, `era`, `genre[]`, `themes[]`, `mood[]`, `occasion[]`, `alt_titles{}`, `key_phrases[]`, `search_text`) that catalog tabs receive. This means search-by-vibe ("trist akustisk", "bryllupssang fra 90-tallet", "kystkultur") *will not find* a user's UG-imported "Wonderwall" even though it's clearly all three of those things. Tabs ARE findable by what the user types literally (artist name, song title, lyric phrases, chord names) — the degradation is specifically on the *associative* search layer that defines NorTabs' core value proposition.
+    
+    This asymmetry is accepted in Phase 1-4 because the enrichment pipeline (`crawler/enrich.py`) runs on Tommy's personal Claude/OpenAI subscription against the *public* catalog and produces a single shared `enrichment.json` everyone benefits from. Running it per-user against private content would either (a) require each user to set up their own LLM access and run the pipeline locally (high friction, anti-NorTabs ethos of "open and it works"), or (b) require a NorTabs-operated backend that processes user uploads and burns LLM budget per-user (out of scope until Phase 5+).
+    
+    **Tommy-personal escape hatch (optional Phase 2.5):** `enrich.py` could grow a `--private-tabs nortabs:private-tabs:v1.json` input mode that reads a UG-export JSON, calls Claude on the same per-song-and-per-artist prompts, and writes to a sidecar `nortabs:private-enrichment:v1` localStorage key (or future IndexedDB store). NorTabs' search index loader would check this sidecar at startup and graft its entries into the same indexes the public `enrichment.json` feeds. Asymmetric — only people who run their own pipeline get enriched private tabs — but valid for Tommy + power users.
+    
+    **Phase 5+ enrichment-as-a-service** (when backend exists, see "Long-term vision"): user uploads UG-export → backend deduplicates against existing enrichment cache (many users share the same UG bookmarks for popular songs) → enriches uncached entries via the same Claude pipeline → returns enriched JSON → app stores it alongside private tabs. Crosses the same legal/licensing line as "shared catalog content" did, but lighter — *metadata* about songs is different from *content* of songs. Probably defensible. Defer the decision until Phase 5+ actually starts.
 
 ## Auto-scroll playback duration (planned)
 
